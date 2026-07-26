@@ -13,6 +13,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Camera/CameraShakeBase.h"
@@ -1183,6 +1184,89 @@ float UUnrealBridgeGameplayLibrary::GetPawnSpeed()
 		return -1.0f;
 	}
 	return Pawn->GetVelocity().Size();
+}
+
+TMap<FString, FString> UUnrealBridgeGameplayLibrary::GetPawnMeshDebug()
+{
+	TMap<FString, FString> Result;
+	UWorld* World = BridgeAgentImpl::GetPIEWorld();
+	ACharacter* Character = Cast<ACharacter>(BridgeAgentImpl::GetPlayerPawn(World));
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : nullptr;
+	if (!Mesh)
+	{
+		return Result;
+	}
+
+	auto AddBool = [&Result](const TCHAR* Key, const bool bValue)
+	{
+		Result.Add(Key, bValue ? TEXT("true") : TEXT("false"));
+	};
+	auto AddFloat = [&Result](const TCHAR* Key, const double Value)
+	{
+		Result.Add(Key, FString::SanitizeFloat(Value));
+	};
+
+	Result.Add(TEXT("ComponentPath"), Mesh->GetPathName());
+	Result.Add(TEXT("SkeletalMesh"), GetPathNameSafe(Mesh->GetSkeletalMeshAsset()));
+	Result.Add(TEXT("AnimInstance"), GetPathNameSafe(Mesh->GetAnimInstance()));
+	Result.Add(TEXT("AnimClass"), GetPathNameSafe(Mesh->GetAnimClass()));
+	Result.Add(TEXT("AnimationMode"), StaticEnum<EAnimationMode::Type>()->GetNameStringByValue(Mesh->GetAnimationMode()));
+	Result.Add(TEXT("ComponentTransform"), Mesh->GetComponentTransform().ToHumanReadableString());
+	Result.Add(TEXT("RelativeTransform"), Mesh->GetRelativeTransform().ToHumanReadableString());
+	Result.Add(TEXT("BoundsOrigin"), Mesh->Bounds.Origin.ToString());
+	Result.Add(TEXT("BoundsExtent"), Mesh->Bounds.BoxExtent.ToString());
+	AddFloat(TEXT("BoundsRadius"), Mesh->Bounds.SphereRadius);
+	AddFloat(TEXT("BoundsScale"), Mesh->BoundsScale);
+	AddBool(TEXT("Registered"), Mesh->IsRegistered());
+	AddBool(TEXT("Active"), Mesh->IsActive());
+	AddBool(TEXT("Visible"), Mesh->IsVisible());
+	AddBool(TEXT("HiddenInGame"), Mesh->bHiddenInGame);
+	AddBool(TEXT("RenderInMainPass"), Mesh->bRenderInMainPass);
+	AddBool(TEXT("OwnerNoSee"), Mesh->bOwnerNoSee);
+	AddBool(TEXT("OnlyOwnerSee"), Mesh->bOnlyOwnerSee);
+	AddBool(TEXT("RenderStateCreated"), Mesh->IsRenderStateCreated());
+	AddBool(TEXT("RenderStateDirty"), Mesh->IsRenderStateDirty());
+	AddBool(TEXT("RecentlyRendered"), Mesh->WasRecentlyRendered(1.0f));
+	AddFloat(TEXT("LastRenderTimeOnScreen"), Mesh->GetLastRenderTimeOnScreen());
+	Result.Add(TEXT("BoneCount"), FString::FromInt(Mesh->GetNumBones()));
+
+	const TArray<FTransform>& ComponentSpaceTransforms = Mesh->GetComponentSpaceTransforms();
+	Result.Add(TEXT("EvaluatedTransformCount"), FString::FromInt(ComponentSpaceTransforms.Num()));
+	if (!ComponentSpaceTransforms.IsEmpty())
+	{
+		FVector MinScale(TNumericLimits<double>::Max());
+		FVector MaxScale(TNumericLimits<double>::Lowest());
+		int32 InvalidTransformCount = 0;
+		int32 NearZeroScaleCount = 0;
+		for (const FTransform& Transform : ComponentSpaceTransforms)
+		{
+			if (!Transform.IsValid())
+			{
+				++InvalidTransformCount;
+				continue;
+			}
+
+			const FVector Scale = Transform.GetScale3D();
+			MinScale.X = FMath::Min(MinScale.X, Scale.X);
+			MinScale.Y = FMath::Min(MinScale.Y, Scale.Y);
+			MinScale.Z = FMath::Min(MinScale.Z, Scale.Z);
+			MaxScale.X = FMath::Max(MaxScale.X, Scale.X);
+			MaxScale.Y = FMath::Max(MaxScale.Y, Scale.Y);
+			MaxScale.Z = FMath::Max(MaxScale.Z, Scale.Z);
+			if (Scale.GetAbsMin() < KINDA_SMALL_NUMBER)
+			{
+				++NearZeroScaleCount;
+			}
+		}
+
+		Result.Add(TEXT("RootTransform"), ComponentSpaceTransforms[0].ToHumanReadableString());
+		Result.Add(TEXT("PoseScaleMin"), MinScale.ToString());
+		Result.Add(TEXT("PoseScaleMax"), MaxScale.ToString());
+		Result.Add(TEXT("InvalidTransformCount"), FString::FromInt(InvalidTransformCount));
+		Result.Add(TEXT("NearZeroScaleCount"), FString::FromInt(NearZeroScaleCount));
+	}
+
+	return Result;
 }
 
 bool UUnrealBridgeGameplayLibrary::GetPawnCapabilities(

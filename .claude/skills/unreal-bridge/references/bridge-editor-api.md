@@ -164,6 +164,20 @@ print(r.success, r.source, r.width, r.height, r.file_path)
 
 Tip: when the caller is Claude Code wanting to "see" the viewport, pass a disk path and then `Read` the PNG — cheaper and more reliable than round-tripping the bytes through base64.
 
+### capture_game_viewport_with_ui(out_file_path, include_base64) -> FBridgeScreenshotResult
+
+Synchronous PIE/game viewport capture through the viewport's Slate widget. Unlike `capture_active_viewport`, this captures the composed game viewport area after UMG/Slate has been painted, so it is the runtime UI evidence path.
+
+Returns `success=False` when there is no active game viewport widget. The result `source` is `"PIESlate"`.
+
+```python
+r = unreal.UnrealBridgeEditorLibrary.capture_game_viewport_with_ui(
+    '<absolute-path>/pie-with-ui.png', False)
+print(r.success, r.source, r.width, r.height, r.error)
+```
+
+Use `capture_active_viewport` for scene/backbuffer inspection and `capture_game_viewport_with_ui` for HUD validation. Restart KeyEditor and regenerate the bridge manifest/client after adding this reflected API.
+
 ### capture_viewport_channel(channel, out_file_path, width, height, max_depth_clamp, include_base64) -> FBridgeChannelCaptureResult
 
 Synchronous GBuffer channel capture at the active editor viewport's pose. Unlike `capture_active_viewport` (final color only), this goes through a transient `ASceneCapture2D` + `UTextureRenderTarget2D` so you can read individual GBuffer channels — depth, world normals, albedo — for quantitative analysis.
@@ -912,6 +926,31 @@ unreal.UnrealBridgeEditorLibrary.create_new_level(True)
 ## PIE
 
 ### start_pie() -> bool
+
+Starts PIE in the currently active Level Editor viewport. Its output size is
+therefore the current docked viewport size and may be too small for UI evidence.
+
+### start_pie_in_new_window(width, height) -> bool
+
+Starts in-process PIE in a dedicated Slate window at the requested pixel size.
+The function uses a transient copy of `ULevelEditorPlaySettings`, so it does not
+change the user's persistent Editor Preferences. Use this before
+`capture_game_viewport_with_ui` for repeatable UI validation.
+
+```python
+unreal.UnrealBridgeEditorLibrary.start_pie_in_new_window(1280, 720)
+```
+
+### conform_pie_viewport_size(width, height) -> bool
+
+After the new PIE window is running, resize it by the measured difference
+between the current game viewport and the requested target. This compensates
+for platform window chrome and DPI behavior without a hard-coded pixel offset.
+Wait one Slate tick, then verify the viewport dimensions before capture.
+
+```python
+unreal.UnrealBridgeEditorLibrary.conform_pie_viewport_size(1280, 720)
+```
 
 ### stop_pie() -> bool
 

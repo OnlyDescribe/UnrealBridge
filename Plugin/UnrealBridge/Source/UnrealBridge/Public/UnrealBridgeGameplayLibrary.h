@@ -686,6 +686,15 @@ public:
 	static float GetPawnSpeed();
 
 	/**
+	 * Read-only diagnostics for the PIE character's primary skeletal mesh.
+	 * The flat string map is intentionally easy to inspect from Python and
+	 * includes render state, bounds, animation instance, and evaluated pose
+	 * scale ranges. Returns an empty map when there is no PIE Character/Mesh.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static TMap<FString, FString> GetPawnMeshDebug();
+
+	/**
 	 * Read the pawn's traversal capabilities out of
 	 * CharacterMovementComponent + CapsuleComponent — the numbers an agent
 	 * needs to reason about "can I fit / jump / step up there". All values

@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-05-22T16:07:54+00:00",
+  "generated_at": "2026-07-26T16:08:34+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -803,6 +803,30 @@
           ],
           "returns": "Array[BridgeStateMachineInfo]"
         },
+        "get_anim_graph_node_object_path": {
+          "doc": "X.get_anim_graph_node_object_path(anim_blueprint_path, graph_name, node_guid) -> str",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "anim_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "graph_name",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "node_guid",
+              "type": ""
+            }
+          ],
+          "returns": "str"
+        },
         "get_anim_graph_nodes": {
           "doc": "X.get_anim_graph_nodes(anim_blueprint_path) -> Array[BridgeAnimGraphNodeInfo]",
           "params": [
@@ -1294,6 +1318,30 @@
             }
           ],
           "returns": "bool"
+        },
+        "repair_imported_anim_sequence_tracks": {
+          "doc": "X.repair_imported_anim_sequence_tracks(sequence_paths, secondary_motion_bone_prefixes, convert_ue_anim_additive_scale) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "sequence_paths",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "secondary_motion_bone_prefixes",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "convert_ue_anim_additive_scale",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
         },
         "set_anim_graph_node_position": {
           "doc": "X.set_anim_graph_node_position(anim_blueprint_path, graph_name, node_guid, pos_x, pos_y) -> bool",
@@ -2179,6 +2227,36 @@
             }
           ],
           "returns": "(int64, out_asset_count=int32)"
+        },
+        "import_ui_textures": {
+          "doc": "X.import_ui_textures(source_filenames, destination_path, replace_existing, save) -> Array[str]",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "source_filenames",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "destination_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "replace_existing",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "save",
+              "type": ""
+            }
+          ],
+          "returns": "Array[str]"
         },
         "list_assets_under_path": {
           "doc": "X.list_assets_under_path(folder_path, include_subfolders) -> Array[SoftObjectPath]",
@@ -8454,6 +8532,24 @@
           ],
           "returns": "BridgeChannelCaptureResult"
         },
+        "capture_game_viewport_with_ui": {
+          "doc": "X.capture_game_viewport_with_ui(out_file_path, include_base64) -> BridgeScreenshotResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "out_file_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "include_base64",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeScreenshotResult"
+        },
         "capture_viewport_channel": {
           "doc": "X.capture_viewport_channel(channel, out_file_path, width, height, max_depth_clamp, include_base64) -> BridgeChannelCaptureResult",
           "params": [
@@ -8576,6 +8672,24 @@
             }
           ],
           "returns": "Array[BridgeCompileResult]"
+        },
+        "conform_pie_viewport_size": {
+          "doc": "X.conform_pie_viewport_size(width, height) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "width",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "height",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
         },
         "create_new_level": {
           "doc": "X.create_new_level(save_existing) -> bool",
@@ -9558,6 +9672,24 @@
         "start_pie": {
           "doc": "X.start_pie() -> bool",
           "params": [],
+          "returns": "bool"
+        },
+        "start_pie_in_new_window": {
+          "doc": "X.start_pie_in_new_window(width, height) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "width",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "height",
+              "type": ""
+            }
+          ],
           "returns": "bool"
         },
         "start_simulate": {
@@ -11690,6 +11822,11 @@
           "doc": "X.get_pawn_max_walk_speed() -> float",
           "params": [],
           "returns": "float"
+        },
+        "get_pawn_mesh_debug": {
+          "doc": "X.get_pawn_mesh_debug() -> Map[str, str]",
+          "params": [],
+          "returns": "Map[str, str]"
         },
         "get_pawn_right_vector": {
           "doc": "X.get_pawn_right_vector() -> Vector or None",
@@ -20094,6 +20231,54 @@
     },
     "UnrealBridgeUMGLibrary": {
       "functions": {
+        "add_widget_blueprint_to_pie_viewport": {
+          "doc": "X.add_widget_blueprint_to_pie_viewport(widget_blueprint_path, z_order) -> bool",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "widget_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "z_order",
+              "type": ""
+            }
+          ],
+          "returns": "bool"
+        },
+        "apply_widget_tree_batch": {
+          "doc": "X.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> BridgeWidgetBatchResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "widget_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "patch_json",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "compile_after",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "save_after",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeWidgetBatchResult"
+        },
         "get_widget_animations": {
           "doc": "X.get_widget_animations(widget_blueprint_path) -> Array[BridgeWidgetAnimationInfo]",
           "params": [
@@ -20160,6 +20345,47 @@
           ],
           "returns": "Array[BridgeWidgetInfo]"
         },
+        "remove_pie_preview_widgets": {
+          "doc": "X.remove_pie_preview_widgets() -> int32",
+          "params": [],
+          "returns": "int32"
+        },
+        "render_widget_blueprint_to_png": {
+          "doc": "X.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> BridgeWidgetRenderResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "widget_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "logical_width",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "logical_height",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "scale",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "output_file",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeWidgetRenderResult"
+        },
         "search_widgets": {
           "doc": "X.search_widgets(widget_blueprint_path, query) -> Array[BridgeWidgetInfo]",
           "params": [
@@ -20211,7 +20437,7 @@
       }
     }
   },
-  "project_path": "G:/UEProjects/Epic/GameAnimationSample_57/GameAnimationSample_57.uproject",
+  "project_path": "K:/Project/Key/Key.uproject",
   "structs": {
     "BridgeAbilityCooldownInfo": [
       "ability_class_name",
@@ -22067,6 +22293,13 @@
       "name",
       "tracks"
     ],
+    "BridgeWidgetBatchResult": [
+      "applied_operations",
+      "error",
+      "messages",
+      "rolled_back",
+      "success"
+    ],
     "BridgeWidgetBindingInfo": [
       "function_name",
       "kind",
@@ -22091,6 +22324,13 @@
       "type",
       "value"
     ],
+    "BridgeWidgetRenderResult": [
+      "error",
+      "height",
+      "output_file",
+      "success",
+      "width"
+    ],
     "BridgeWireIAResult": [
       "call_node_guid",
       "event_node_guid",
@@ -22098,5 +22338,5 @@
       "wired"
     ]
   },
-  "ue_version": "5.7.1-48512491+++UE5+Release-5.7"
+  "ue_version": "5.7.4-0+UE5"
 }

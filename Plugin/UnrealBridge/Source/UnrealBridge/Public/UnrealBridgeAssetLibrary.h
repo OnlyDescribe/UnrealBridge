@@ -554,6 +554,21 @@ public:
 		int32 MaxDepth,
 		TArray<FString>& OutDependencyPackageNames);
 
+	// ── Editor import ────────────────────────────────────────
+
+	/**
+	 * Import image files as Texture2D assets under DestinationPath.
+	 * Imported textures are configured for UI (no mipmaps, UI LOD group,
+	 * never stream). Invalid or failed files are omitted from the result.
+	 * Returns full object paths in the same order as successful imports.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static TArray<FString> ImportUITextures(
+		const TArray<FString>& SourceFilenames,
+		const FString& DestinationPath,
+		bool bReplaceExisting,
+		bool bSave);
+
 	// ── Asset introspection ──────────────────────────────────
 
 	/**

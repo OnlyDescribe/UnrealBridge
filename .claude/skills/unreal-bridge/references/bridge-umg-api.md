@@ -154,3 +154,117 @@ ok = unreal.UnrealBridgeUMGLibrary.set_widget_property(
     '/Game/UI/WBP_Main', 'TitleText', 'Text', 'Hello World'
 )
 ```
+
+---
+
+## PIE Widget Preview
+
+### add_widget_blueprint_to_pie_viewport(widget_blueprint_path, z_order) -> bool
+
+Instantiate a `UUserWidget` Blueprint in the active PIE viewport without
+changing the Widget Blueprint asset. Use this for runtime visual validation of
+a screen that the current game flow does not open automatically.
+
+```python
+unreal.UnrealBridgeUMGLibrary.add_widget_blueprint_to_pie_viewport(
+    '/Game/UI/WBP_Main', 100)
+```
+
+### remove_pie_preview_widgets() -> int
+
+Remove every still-live widget added through the preview helper and return the
+number removed. PIE teardown also destroys them.
+
+---
+
+## Offscreen Widget Render
+
+### render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> FBridgeWidgetRenderResult
+
+Instantiate a compiled Widget Blueprint in the editor world and render its
+Slate composition into a transparent PNG without opening PIE or the UMG
+designer. The renderer performs a warm-up draw, completes pending shader
+compilation, and then records the evidence draw so material-backed brushes are
+not silently omitted.
+
+Use `scale=1.0` for the baseline image of a viewport-anchored CanvasPanel. A
+non-unit scale also changes the render target size and is intended for explicit
+supersampling tests, not as a substitute for project DPI layout.
+
+```python
+from unreal_bridge import UMG
+
+result = UMG.render_widget_blueprint_to_png(
+    widget_blueprint_path='/Game/UI/WBP_Main',
+    logical_width=1280,
+    logical_height=720,
+    scale=1.0,
+    output_file='K:/Project/Key/Saved/UIValidation/iteration-001/actual-design.png')
+print(result.success, result.output_file, result.width, result.height, result.error)
+```
+
+### FBridgeWidgetRenderResult fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | Whether the PNG export completed. |
+| `output_file` | str | Absolute output PNG path. |
+| `width` | int | Physical output width. |
+| `height` | int | Physical output height. |
+| `error` | str | Validation or export failure; empty on success. |
+
+---
+
+## Transactional Widget Tree Batch
+
+### apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> FBridgeWidgetBatchResult
+
+Preflight and apply a WidgetTree patch as one editor transaction. Supported operations are `create`, `set`, `move`, `reorder`, and `delete`. The preflight rejects duplicate names, missing/non-panel parents, single-child-panel overflow, cycles, invalid classes/properties, root deletion, and delete operations without `confirm_delete: true` before changing the asset.
+
+Moves preserve compatible slot properties and allow explicit slot overrides. A failure encountered during application invokes editor undo for the transaction.
+
+```python
+import json
+
+patch = {
+    "operations": [
+        {
+            "op": "create",
+            "name": "QuestIcon",
+            "class": "/Script/UMG.Image",
+            "parent": "RootCanvas",
+            "index": 0,
+            "properties": {"Visibility": "SelfHitTestInvisible"},
+            "slot_properties": {
+                "LayoutData": "(Offsets=(Left=40,Top=210,Right=48,Bottom=48),Anchors=(Minimum=(X=0,Y=0),Maximum=(X=0,Y=0)),Alignment=(X=0,Y=0))"
+            }
+        },
+        {"op": "set", "widget": "QuestIcon", "properties": {"RenderOpacity": 0.9}},
+        {"op": "reorder", "widget": "QuestIcon", "index": 2},
+        {"op": "move", "widget": "QuestIcon", "parent": "HUDOverlay", "index": 0}
+    ]
+}
+
+r = unreal.UnrealBridgeUMGLibrary.apply_widget_tree_batch(
+    '/Game/UI/WBP_Main', json.dumps(patch), True, True)
+print(r.success, r.rolled_back, r.applied_operations, r.error)
+print('\n'.join(r.messages))
+```
+
+Deletion must be explicit:
+
+```json
+{"op":"delete","widget":"ObsoletePanel","confirm_delete":true}
+```
+
+### FBridgeWidgetBatchResult fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | True only after every requested operation and optional compile/save completed. |
+| `rolled_back` | bool | True when an application-time failure triggered transaction undo. |
+| `applied_operations` | int | Number of operations applied before completion or rollback. |
+| `error` | str | Preflight or application error. Empty on success. |
+| `messages` | list[str] | Per-operation validation/application trace. |
+
+The operation/property schema is intentionally reflection-driven. Use exported UE property text for complex structs. Restart KeyEditor and regenerate the bridge manifest/client after adding this reflected API.

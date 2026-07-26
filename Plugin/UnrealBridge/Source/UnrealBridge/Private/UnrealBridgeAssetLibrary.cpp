@@ -1,21 +1,26 @@
 // Ported from UnrealClientProtocol (MIT License - Italink)
 
 #include "UnrealBridgeAssetLibrary.h"
+#include "AssetImportTask.h"
 #include "AssetRegistry/ARFilter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "AssetToolsModule.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/DataAsset.h"
 #include "UObject/ObjectRedirector.h"
 #include "HAL/FileManager.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "UObject/TopLevelAssetPath.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshSocket.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Engine/Texture2D.h"
+#include "FileHelpers.h"
+#include "IAssetTools.h"
 #include "Engine/SkinnedAssetCommon.h"
 #include "Sound/SoundWave.h"
 #include "Sound/SoundCue.h"
@@ -1317,6 +1322,88 @@ FBridgeSkeletalMeshInfo UUnrealBridgeAssetLibrary::GetSkeletalMeshInfo(const FSt
 		Out.PhysicsAssetPath = Phys->GetPathName();
 	}
 	return Out;
+}
+
+TArray<FString> UUnrealBridgeAssetLibrary::ImportUITextures(
+	const TArray<FString>& SourceFilenames,
+	const FString& DestinationPath,
+	bool bReplaceExisting,
+	bool bSave)
+{
+	TArray<FString> ImportedObjectPaths;
+	if (SourceFilenames.IsEmpty() || !DestinationPath.StartsWith(TEXT("/Game")) ||
+		!FPackageName::IsValidLongPackageName(DestinationPath))
+	{
+		return ImportedObjectPaths;
+	}
+
+	TArray<UAssetImportTask*> Tasks;
+	Tasks.Reserve(SourceFilenames.Num());
+	for (const FString& SourceFilename : SourceFilenames)
+	{
+		const FString AbsoluteFilename = FPaths::ConvertRelativePathToFull(SourceFilename);
+		if (!FPaths::FileExists(AbsoluteFilename))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("UnrealBridge: UI texture source does not exist: '%s'"),
+				*AbsoluteFilename);
+			continue;
+		}
+
+		UAssetImportTask* Task = NewObject<UAssetImportTask>();
+		Task->Filename = AbsoluteFilename;
+		Task->DestinationPath = DestinationPath;
+		Task->bAutomated = true;
+		Task->bReplaceExisting = bReplaceExisting;
+		Task->bReplaceExistingSettings = bReplaceExisting;
+		// Save after applying the UI texture settings below.
+		Task->bSave = false;
+		Task->bAsync = false;
+		Tasks.Add(Task);
+	}
+
+	if (Tasks.IsEmpty())
+	{
+		return ImportedObjectPaths;
+	}
+
+	FAssetToolsModule& AssetToolsModule =
+		FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+	AssetToolsModule.Get().ImportAssetTasks(Tasks);
+
+	TArray<UPackage*> PackagesToSave;
+	for (UAssetImportTask* Task : Tasks)
+	{
+		if (!Task)
+		{
+			continue;
+		}
+		for (const FString& ObjectPath : Task->ImportedObjectPaths)
+		{
+			UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *ObjectPath);
+			if (!Texture)
+			{
+				continue;
+			}
+
+			Texture->Modify();
+			Texture->LODGroup = TEXTUREGROUP_UI;
+			Texture->MipGenSettings = TMGS_NoMipmaps;
+			Texture->NeverStream = true;
+			Texture->SRGB = true;
+			Texture->PostEditChange();
+			Texture->MarkPackageDirty();
+			Texture->UpdateResource();
+			ImportedObjectPaths.Add(Texture->GetPathName());
+			PackagesToSave.AddUnique(Texture->GetOutermost());
+		}
+	}
+
+	if (bSave && !PackagesToSave.IsEmpty())
+	{
+		UEditorLoadingAndSavingUtils::SavePackages(PackagesToSave, false);
+	}
+	return ImportedObjectPaths;
 }
 
 FBridgeTextureInfo UUnrealBridgeAssetLibrary::GetTextureInfo(const FString& AssetPath)

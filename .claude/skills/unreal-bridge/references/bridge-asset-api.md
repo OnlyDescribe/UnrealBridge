@@ -554,6 +554,26 @@ all_   = AL.get_package_dependencies_recursive(pkg, False, 0)  # 864 (full closu
 
 ---
 
+## UI Texture Import
+
+### import_ui_textures(source_filenames, destination_path, replace_existing, save) -> list[str]
+
+Import local image files as `Texture2D` assets under a `/Game` destination.
+Successful textures are configured for UI rendering: `TEXTUREGROUP_UI`, no
+mipmaps, sRGB, and never-stream. The function returns full object paths for
+successful imports and omits missing or failed files. Existing assets are only
+replaced when `replace_existing=True`.
+
+```python
+paths = unreal.UnrealBridgeAssetLibrary.import_ui_textures(
+    [r'K:\Exports\SP_ComHpBarBg.png'],
+    '/Game/UI/HUD/Textures',
+    False,
+    True)
+```
+
+---
+
 ## Asset introspection
 
 Per-asset metadata queries. Answer "what's in this mesh / texture / sound?"

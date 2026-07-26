@@ -4,6 +4,8 @@
 #include "Animation/AnimBlueprint.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimSequenceBase.h"
+#include "Animation/AnimData/IAnimationDataController.h"
+#include "Animation/AnimData/IAnimationDataModel.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimationAsset.h"
 #include "Animation/BlendSpace.h"
@@ -772,6 +774,140 @@ bool UUnrealBridgeAnimLibrary::SetAnimSequenceRateScale(
 	Seq->PostEditChange();
 	Seq->MarkPackageDirty();
 	return true;
+}
+
+TArray<FString> UUnrealBridgeAnimLibrary::RepairImportedAnimSequenceTracks(
+	const TArray<FString>& SequencePaths,
+	const TArray<FString>& SecondaryMotionBonePrefixes,
+	bool bConvertUEAnimAdditiveScale)
+{
+	TArray<FString> Results;
+	Results.Reserve(SequencePaths.Num());
+
+	for (const FString& SequencePath : SequencePaths)
+	{
+		UAnimSequence* Sequence = LoadObject<UAnimSequence>(nullptr, *SequencePath);
+		if (!Sequence)
+		{
+			Results.Add(FString::Printf(TEXT("%s\tERROR\tasset-not-found"), *SequencePath));
+			continue;
+		}
+
+		const IAnimationDataModel* Model = Sequence->GetDataModel();
+		if (!Model)
+		{
+			Results.Add(FString::Printf(TEXT("%s\tERROR\tdata-model-not-found"), *SequencePath));
+			continue;
+		}
+
+		TArray<FName> TrackNames;
+		Model->GetBoneTrackNames(TrackNames);
+
+		TArray<FName> TracksToRemove;
+		if (Sequence->AdditiveAnimType == AAT_None && !SecondaryMotionBonePrefixes.IsEmpty())
+		{
+			for (const FName TrackName : TrackNames)
+			{
+				const FString TrackNameString = TrackName.ToString();
+				const bool bMatchesSecondaryPrefix = SecondaryMotionBonePrefixes.ContainsByPredicate(
+					[&TrackNameString](const FString& Prefix)
+					{
+						return !Prefix.IsEmpty() && TrackNameString.StartsWith(Prefix, ESearchCase::IgnoreCase);
+					});
+
+				if (bMatchesSecondaryPrefix)
+				{
+					TracksToRemove.Add(TrackName);
+				}
+			}
+		}
+
+		bool bShouldConvertScale = false;
+		if (bConvertUEAnimAdditiveScale && Sequence->AdditiveAnimType != AAT_None)
+		{
+			double DistanceToZero = 0.0;
+			double DistanceToOne = 0.0;
+			int64 ScaleKeyCount = 0;
+
+			for (const FName TrackName : TrackNames)
+			{
+				TArray<FTransform> BoneTransforms;
+				Model->GetBoneTrackTransforms(TrackName, BoneTransforms);
+				for (const FTransform& Transform : BoneTransforms)
+				{
+					const FVector3f Scale(Transform.GetScale3D());
+					DistanceToZero += Scale.SizeSquared();
+					DistanceToOne += (Scale - FVector3f::OneVector).SizeSquared();
+					++ScaleKeyCount;
+				}
+			}
+
+			// Raw UAnimSequence data remains centered on identity scale. Unreal turns
+			// that raw pose into additive deltas during sequence build/evaluation.
+			// An earlier repair incorrectly pre-subtracted identity, which made UE
+			// subtract it a second time and collapsed almost every evaluated bone to
+			// zero scale. Restore only clearly zero-centered raw tracks, so rerunning
+			// this operation on a healthy sequence is safe.
+			bShouldConvertScale = ScaleKeyCount > 0 && DistanceToZero < DistanceToOne;
+		}
+
+		if (TracksToRemove.IsEmpty() && !bShouldConvertScale)
+		{
+			Results.Add(FString::Printf(TEXT("%s\tUNCHANGED\tremoved=0\tscale_tracks=0"), *SequencePath));
+			continue;
+		}
+
+		const FScopedTransaction Transaction(LOCTEXT("RepairImportedAnimSequenceTracks", "Repair Imported Animation Tracks"));
+		Sequence->Modify();
+		IAnimationDataController& Controller = Sequence->GetController();
+		IAnimationDataController::FScopedBracket Bracket(
+			Controller, LOCTEXT("RepairImportedAnimSequenceTracksBracket", "Repairing imported animation tracks"));
+
+		int32 ConvertedScaleTrackCount = 0;
+		if (bShouldConvertScale)
+		{
+			for (const FName TrackName : TrackNames)
+			{
+				TArray<FTransform> BoneTransforms;
+				Model->GetBoneTrackTransforms(TrackName, BoneTransforms);
+
+				TArray<FVector3f> PositionKeys;
+				TArray<FQuat4f> RotationKeys;
+				TArray<FVector3f> ScaleKeys;
+				PositionKeys.Reserve(BoneTransforms.Num());
+				RotationKeys.Reserve(BoneTransforms.Num());
+				ScaleKeys.Reserve(BoneTransforms.Num());
+
+				for (const FTransform& Transform : BoneTransforms)
+				{
+					PositionKeys.Add(FVector3f(Transform.GetLocation()));
+					RotationKeys.Add(FQuat4f(Transform.GetRotation()));
+					ScaleKeys.Add(FVector3f(Transform.GetScale3D()) + FVector3f::OneVector);
+				}
+
+				if (Controller.SetBoneTrackKeys(TrackName, PositionKeys, RotationKeys, ScaleKeys, false))
+				{
+					++ConvertedScaleTrackCount;
+				}
+			}
+		}
+
+		int32 RemovedTrackCount = 0;
+		for (const FName TrackName : TracksToRemove)
+		{
+			if (Controller.RemoveBoneTrack(TrackName, false))
+			{
+				++RemovedTrackCount;
+			}
+		}
+
+		Sequence->PostEditChange();
+		Sequence->MarkPackageDirty();
+		Results.Add(FString::Printf(TEXT("%s\tCHANGED\tremoved=%d\tscale_tracks=%d"),
+			*SequencePath, RemovedTrackCount, ConvertedScaleTrackCount));
+	}
+
+	return Results;
 }
 
 bool UUnrealBridgeAnimLibrary::AddMontageSection(
@@ -1654,6 +1790,15 @@ FString UUnrealBridgeAnimLibrary::FindAnimGraphNodeByClass(const FString& AnimBl
 			return N->NodeGuid.ToString(EGuidFormats::Digits);
 	}
 	return FString();
+}
+
+FString UUnrealBridgeAnimLibrary::GetAnimGraphNodeObjectPath(const FString& AnimBlueprintPath,
+	const FString& GraphName, const FString& NodeGuid)
+{
+	UAnimBlueprint* ABP = BridgeAnimImpl::LoadABP(AnimBlueprintPath);
+	UEdGraph* Graph = BridgeAnimWriteImpl::FindAnyGraphByName(ABP, GraphName);
+	UEdGraphNode* Node = BridgeAnimWriteImpl::FindNodeByGuid(Graph, NodeGuid);
+	return Node ? Node->GetPathName() : FString();
 }
 
 // ─── AnimGraph node factories ───────────────────────────────

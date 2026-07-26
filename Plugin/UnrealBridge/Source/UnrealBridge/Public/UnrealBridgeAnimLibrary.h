@@ -630,6 +630,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static bool SetAnimSequenceRateScale(const FString& SequencePath, float RateScale);
 
+	/**
+	 * Repair UEAnim-imported bone tracks in one or more AnimSequences.
+	 * Non-additive sequences can have character-specific secondary-motion tracks
+	 * removed by prefix. Additive sequences whose scale keys are centered around
+	 * one are converted to Unreal's zero-centered additive scale representation.
+	 * Returns one tab-separated summary row per input path.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static TArray<FString> RepairImportedAnimSequenceTracks(const TArray<FString>& SequencePaths,
+		const TArray<FString>& SecondaryMotionBonePrefixes, bool bConvertUEAnimAdditiveScale);
+
 	/** Add a composite section to a montage. Returns false when name already exists or StartTime invalid. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static bool AddMontageSection(const FString& MontagePath, const FString& SectionName, float StartTime);
@@ -768,6 +779,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static FString FindAnimGraphNodeByClass(const FString& AnimBlueprintPath, const FString& GraphName,
 		const FString& ShortClassName);
+
+	/** Return the loadable UObject path for a graph node identified by graph name and GUID. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static FString GetAnimGraphNodeObjectPath(const FString& AnimBlueprintPath, const FString& GraphName,
+		const FString& NodeGuid);
 
 	/**
 	 * Spawn a UAnimGraphNode_SequencePlayer in `GraphName`, bound to SequencePath.

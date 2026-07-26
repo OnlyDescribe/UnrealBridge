@@ -5325,4 +5325,3 @@ class UMG:
     def set_widget_property(*, widget_blueprint_path, widget_name, property_name, value):
         """X.set_widget_property(widget_blueprint_path, widget_name, property_name, value) -> bool"""
         return unreal.UnrealBridgeUMGLibrary.set_widget_property(widget_blueprint_path, widget_name, property_name, value)
-

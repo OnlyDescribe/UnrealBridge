@@ -55,6 +55,7 @@
 #include "EditorModeManager.h"
 #include "UnrealWidget.h"
 #include "Settings/LevelEditorViewportSettings.h"
+#include "Settings/LevelEditorPlaySettings.h"
 #include "Settings/EditorLoadingSavingSettings.h"
 #include "ISourceControlModule.h"
 #include "ISourceControlProvider.h"
@@ -66,6 +67,8 @@
 #include "Misc/FileHelper.h"
 #include "UnrealClient.h"
 #include "Engine/GameViewportClient.h"
+#include "Widgets/SViewport.h"
+#include "Widgets/SWindow.h"
 #include "Engine/SceneCapture2D.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -484,6 +487,95 @@ bool UUnrealBridgeEditorLibrary::StartPIE()
 	// The request is deferred to the next editor tick; kick it so PIE actually
 	// starts (and spawns the default pawn) without requiring an external tick.
 	GEditor->StartQueuedPlaySessionRequest();
+	return true;
+}
+
+bool UUnrealBridgeEditorLibrary::StartPIEInNewWindow(int32 Width, int32 Height)
+{
+	if (!GEditor || Width <= 0 || Height <= 0)
+	{
+		return false;
+	}
+	if (GEditor->PlayWorld)
+	{
+		return true;
+	}
+
+	FRequestPlaySessionParams Params;
+	Params.WorldType = EPlaySessionWorldType::PlayInEditor;
+
+	// A transient copy avoids changing the user's persistent Editor Preferences.
+	ULevelEditorPlaySettings* PlaySettings = DuplicateObject<ULevelEditorPlaySettings>(
+		GetDefault<ULevelEditorPlaySettings>(), GetTransientPackage());
+	if (!PlaySettings)
+	{
+		return false;
+	}
+	PlaySettings->NewWindowWidth = Width;
+	PlaySettings->NewWindowHeight = Height;
+	PlaySettings->CenterNewWindow = true;
+	Params.EditorPlaySettings = PlaySettings;
+
+	// Preserve the existing StartPIE behavior of spawning from the active
+	// editor camera when the level has no PlayerStart, but deliberately leave
+	// DestinationSlateViewport unset so UE creates a correctly-sized window.
+	if (FModuleManager::Get().IsModuleLoaded("LevelEditor"))
+	{
+		FLevelEditorModule& LE = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
+		TSharedPtr<IAssetViewport> ActiveViewport = LE.GetFirstActiveViewport();
+		if (ActiveViewport.IsValid())
+		{
+			FEditorViewportClient& VC = ActiveViewport->GetAssetViewportClient();
+			Params.StartLocation = VC.GetViewLocation();
+			Params.StartRotation = VC.GetViewRotation();
+		}
+	}
+
+	GEditor->RequestPlaySession(Params);
+	GEditor->StartQueuedPlaySessionRequest();
+	return true;
+}
+
+bool UUnrealBridgeEditorLibrary::ConformPIEViewportSize(int32 Width, int32 Height)
+{
+	if (Width <= 0 || Height <= 0 || !GEngine || !GEngine->GameViewport ||
+		!GEngine->GameViewport->Viewport || !FSlateApplication::IsInitialized())
+	{
+		return false;
+	}
+
+	const TSharedPtr<SViewport> ViewportWidget = GEngine->GameViewport->GetGameViewportWidget();
+	if (!ViewportWidget.IsValid())
+	{
+		return false;
+	}
+
+	const TSharedPtr<SWindow> ViewportWindow =
+		FSlateApplication::Get().FindWidgetWindow(ViewportWidget.ToSharedRef());
+	if (!ViewportWindow.IsValid())
+	{
+		return false;
+	}
+
+	const FIntPoint CurrentViewportSize = GEngine->GameViewport->Viewport->GetSizeXY();
+	if (CurrentViewportSize.X <= 0 || CurrentViewportSize.Y <= 0)
+	{
+		return false;
+	}
+
+	// PIE's requested window client size and the actual game viewport can differ
+	// because of platform chrome and DPI policy. Adjust by the measured delta
+	// instead of baking in a platform-specific pixel offset.
+	const FVector2D CurrentClientSize = ViewportWindow->GetClientSizeInScreen();
+	const FVector2D TargetClientSize(
+		CurrentClientSize.X + static_cast<double>(Width - CurrentViewportSize.X),
+		CurrentClientSize.Y + static_cast<double>(Height - CurrentViewportSize.Y));
+	if (TargetClientSize.X <= 0.0 || TargetClientSize.Y <= 0.0)
+	{
+		return false;
+	}
+
+	ViewportWindow->Resize(TargetClientSize);
 	return true;
 }
 
@@ -1047,6 +1139,90 @@ FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewport(const 
 			return R;
 		}
 		R.Base64 = FBase64::Encode(Compressed.GetData(), (uint32)Num);
+	}
+
+	R.bSuccess = true;
+	return R;
+}
+
+FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureGameViewportWithUI(
+	const FString& OutFilePath, bool bIncludeBase64)
+{
+	FBridgeScreenshotResult R;
+	R.Source = TEXT("PIESlate");
+
+	if (!GEditor || !GEditor->PlayWorld || !GEngine || !GEngine->GameViewport)
+	{
+		R.Error = TEXT("PIE is not running or the game viewport is unavailable.");
+		return R;
+	}
+	if (OutFilePath.IsEmpty() && !bIncludeBase64)
+	{
+		R.Error = TEXT("Either OutFilePath must be non-empty or bIncludeBase64 must be true.");
+		return R;
+	}
+
+	const TSharedPtr<SViewport> ViewportWidget = GEngine->GameViewport->GetGameViewportWidget();
+	if (!ViewportWidget.IsValid())
+	{
+		R.Error = TEXT("The PIE game viewport has no valid Slate viewport widget.");
+		return R;
+	}
+
+	TArray<FColor> Bitmap;
+	FIntVector Size = FIntVector::ZeroValue;
+	if (!FSlateApplication::Get().TakeScreenshot(ViewportWidget.ToSharedRef(), Bitmap, Size)
+		|| Size.X <= 0 || Size.Y <= 0 || Bitmap.Num() < Size.X * Size.Y)
+	{
+		R.Error = TEXT("Slate failed to capture the composed PIE viewport.");
+		return R;
+	}
+	for (FColor& Color : Bitmap)
+	{
+		Color.A = 255;
+	}
+
+	IImageWrapperModule& IWM = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	TSharedPtr<IImageWrapper> PNG = IWM.CreateImageWrapper(EImageFormat::PNG);
+	if (!PNG.IsValid()
+		|| !PNG->SetRaw(Bitmap.GetData(), Bitmap.Num() * sizeof(FColor),
+			Size.X, Size.Y, ERGBFormat::BGRA, 8))
+	{
+		R.Error = TEXT("Failed to initialize PNG image wrapper.");
+		return R;
+	}
+	const TArray64<uint8>& Compressed = PNG->GetCompressed();
+	if (Compressed.Num() == 0)
+	{
+		R.Error = TEXT("PNG encoding produced no bytes.");
+		return R;
+	}
+
+	R.Width = Size.X;
+	R.Height = Size.Y;
+	if (!OutFilePath.IsEmpty())
+	{
+		const FString AbsPath = FPaths::ConvertRelativePathToFull(OutFilePath);
+		const FString DirOnly = FPaths::GetPath(AbsPath);
+		if (!DirOnly.IsEmpty())
+		{
+			IFileManager::Get().MakeDirectory(*DirOnly, /*Tree=*/true);
+		}
+		if (!FFileHelper::SaveArrayToFile(Compressed, *AbsPath))
+		{
+			R.Error = FString::Printf(TEXT("Failed to write PNG to '%s'."), *AbsPath);
+			return R;
+		}
+		R.FilePath = AbsPath;
+	}
+	if (bIncludeBase64)
+	{
+		if (Compressed.Num() > static_cast<int64>(MAX_int32))
+		{
+			R.Error = TEXT("PNG too large to base64-encode.");
+			return R;
+		}
+		R.Base64 = FBase64::Encode(Compressed.GetData(), static_cast<uint32>(Compressed.Num()));
 	}
 
 	R.bSuccess = true;

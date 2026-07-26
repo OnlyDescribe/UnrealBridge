@@ -337,6 +337,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
 	static bool StartPIE();
 
+	/**
+	 * Start in-process PIE in a dedicated Slate window at an explicit pixel
+	 * size. Uses a transient play-settings copy, so the user's persistent
+	 * Editor Preferences are not changed. Width and Height must be positive.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
+	static bool StartPIEInNewWindow(int32 Width, int32 Height);
+
+	/**
+	 * Resize the active PIE window so its measured game viewport, rather than
+	 * merely the window request, matches Width x Height. Call after PIE is
+	 * running, then wait one Slate tick before measuring or capturing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
+	static bool ConformPIEViewportSize(int32 Width, int32 Height);
+
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
 	static bool StopPIE();
 
@@ -508,6 +524,15 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
 	static FBridgeScreenshotResult CaptureActiveViewport(const FString& OutFilePath, bool bIncludeBase64);
+
+	/**
+	 * Capture the PIE game viewport's final Slate composition, including UMG
+	 * and CommonUI overlays. The result is cropped to the game viewport widget,
+	 * so editor chrome is excluded. PIE must be running.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
+	static FBridgeScreenshotResult CaptureGameViewportWithUI(
+		const FString& OutFilePath, bool bIncludeBase64);
 
 	/**
 	 * Render a single GBuffer channel of the active viewport via a

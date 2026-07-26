@@ -127,6 +127,50 @@ struct FBridgeWidgetEventInfo
 	FString HandlerName;
 };
 
+/** Result of an atomic, declarative WidgetTree edit batch. */
+USTRUCT(BlueprintType)
+struct FBridgeWidgetBatchResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	bool bSuccess = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	bool bRolledBack = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	int32 AppliedOperations = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	FString Error;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	TArray<FString> Messages;
+};
+
+/** Result of rendering a Widget Blueprint without opening PIE or the UMG designer. */
+USTRUCT(BlueprintType)
+struct FBridgeWidgetRenderResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	bool bSuccess = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	FString OutputFile;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	int32 Width = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	int32 Height = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|UMG")
+	FString Error;
+};
+
 /**
  * UMG / Widget Blueprint introspection via UnrealBridge.
  */
@@ -136,6 +180,29 @@ class UNREALBRIDGE_API UUnrealBridgeUMGLibrary : public UBlueprintFunctionLibrar
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Instantiate a UserWidget Blueprint in the active PIE world's viewport.
+	 * This is runtime-only visual validation and does not modify the asset.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
+	static bool AddWidgetBlueprintToPIEViewport(
+		const FString& WidgetBlueprintPath, int32 ZOrder);
+
+	/** Remove widgets added by AddWidgetBlueprintToPIEViewport. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
+	static int32 RemovePIEPreviewWidgets();
+
+	/**
+	 * Render a Widget Blueprint through Slate into a transparent PNG.
+	 *
+	 * LogicalWidth/LogicalHeight are the layout space presented to the widget.
+	 * Scale controls the Slate render scale and output target size. Use scale
+	 * 1.0 for baseline captures of viewport-anchored CanvasPanel layouts.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
+	static FBridgeWidgetRenderResult RenderWidgetBlueprintToPNG(
+		const FString& WidgetBlueprintPath, int32 LogicalWidth, int32 LogicalHeight,
+		float Scale, const FString& OutputFile);
 
 	/**
 	 * Get the widget hierarchy of a Widget Blueprint.
@@ -184,4 +251,23 @@ public:
 	static bool SetWidgetProperty(
 		const FString& WidgetBlueprintPath, const FString& WidgetName,
 		const FString& PropertyName, const FString& Value);
+
+	/**
+	 * Apply a prevalidated WidgetTree edit batch as one undo unit.
+	 *
+	 * PatchJson shape: {"operations":[...]}. Supported operations:
+	 *   create  {name,class,parent?,index?,is_variable?,properties?,slot_properties?}
+	 *   set     {name|widget,properties?,slot_properties?}
+	 *   move    {name|widget,parent,index?,slot_properties?}
+	 *   reorder {name|widget,index}
+	 *   delete  {name|widget,confirm_delete:true}
+	 *
+	 * Property values use UE exported-text syntax. All targets and topology are
+	 * validated before mutation. On a mid-batch failure, the completed editor
+	 * transaction is immediately undone. Compiling and saving are explicit.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
+	static FBridgeWidgetBatchResult ApplyWidgetTreeBatch(
+		const FString& WidgetBlueprintPath, const FString& PatchJson,
+		bool bCompileAfter, bool bSaveAfter);
 };
