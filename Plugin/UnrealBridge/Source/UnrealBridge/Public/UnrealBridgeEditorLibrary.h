@@ -514,7 +514,9 @@ public:
 	 *
 	 * Runs on the game thread — flushes a Draw() + ReadPixels round-trip,
 	 * encodes PNG via IImageWrapper, optionally returns base64 so callers
-	 * can read the pixels in-process without touching the filesystem.
+	 * can read the pixels in-process without touching the filesystem. This
+	 * is raw FViewport readback; use CaptureActiveViewportAsDisplayed when
+	 * final Slate overlays must be included.
 	 *
 	 * @param OutFilePath      Absolute path to write the PNG to. Pass ""
 	 *                         to skip disk and only populate Base64 (requires
@@ -526,9 +528,28 @@ public:
 	static FBridgeScreenshotResult CaptureActiveViewport(const FString& OutFilePath, bool bIncludeBase64);
 
 	/**
-	 * Capture the PIE game viewport's final Slate composition, including UMG
-	 * and CommonUI overlays. The result is cropped to the game viewport widget,
-	 * so editor chrome is excluded. PIE must be running.
+	 * Synchronously capture the currently-active viewport exactly as Slate
+	 * presents it (PIE when running, otherwise the active level viewport).
+	 *
+	 * Unlike CaptureActiveViewport, this captures the pixels already presented
+	 * by the native editor window and crops them to the SViewport region. It
+	 * therefore preserves one-frame debug drawing as well as stats, selection
+	 * outlines, editor gizmos, and PIE HUD/UMG visible inside the viewport.
+	 * Platforms without native-window readback fall back to Slate capture. OS
+	 * cursors and separate popup windows outside the viewport are not included.
+	 *
+	 * @param OutFilePath      Absolute path to write the PNG to. Pass ""
+	 *                         to skip disk and only populate Base64 (requires
+	 *                         bIncludeBase64 = true).
+	 * @param bIncludeBase64   Fill FBridgeScreenshotResult::Base64 with the
+	 *                         compressed PNG bytes. Base64 inflates ~33%.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
+	static FBridgeScreenshotResult CaptureActiveViewportAsDisplayed(const FString& OutFilePath, bool bIncludeBase64);
+
+	/**
+	 * Compatibility alias for CaptureActiveViewportAsDisplayed that requires
+	 * PIE and therefore preserves the original UI-validation contract.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
 	static FBridgeScreenshotResult CaptureGameViewportWithUI(

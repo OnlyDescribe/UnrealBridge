@@ -22,6 +22,7 @@
 #include "FileHelpers.h"
 #include "IAssetTools.h"
 #include "Engine/SkinnedAssetCommon.h"
+#include "Materials/MaterialInterface.h"
 #include "Sound/SoundWave.h"
 #include "Sound/SoundCue.h"
 #include "Animation/Skeleton.h"
@@ -31,6 +32,10 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "Rendering/SkeletalMeshRenderData.h"
 #include "Rendering/SkeletalMeshLODRenderData.h"
+#include "ScopedTransaction.h"
+#include "FileHelpers.h"
+#include "UObject/Package.h"
+#include "UObject/UnrealType.h"
 
 // ─── Internal helpers ───────────────────────────────────────
 
@@ -1207,6 +1212,211 @@ namespace BridgeAssetIntrospection
 			OutAssetPaths.Add(M.MaterialInterface ? M.MaterialInterface->GetPathName() : FString());
 		}
 	}
+
+	/** Load either supported mesh type, including export-text object paths. */
+	static UObject* LoadMeshAsset(const FString& MeshAssetPath, FString& OutMeshType)
+	{
+		FString ObjectPath;
+		BridgeAssetOps::ParsePathToObjectPath(MeshAssetPath, ObjectPath);
+		UObject* Object = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath);
+		if (Cast<UStaticMesh>(Object))
+		{
+			OutMeshType = TEXT("StaticMesh");
+			return Object;
+		}
+		if (Cast<USkeletalMesh>(Object))
+		{
+			OutMeshType = TEXT("SkeletalMesh");
+			return Object;
+		}
+		OutMeshType.Reset();
+		return nullptr;
+	}
+
+	static int32 GetMaterialCount(const UObject* MeshObject)
+	{
+		if (const UStaticMesh* Mesh = Cast<UStaticMesh>(MeshObject))
+		{
+			return Mesh->GetStaticMaterials().Num();
+		}
+		if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(MeshObject))
+		{
+			return Mesh->GetMaterials().Num();
+		}
+		return 0;
+	}
+
+	static FName GetMaterialSlotName(const UObject* MeshObject, int32 MaterialIndex)
+	{
+		if (const UStaticMesh* Mesh = Cast<UStaticMesh>(MeshObject))
+		{
+			return Mesh->GetStaticMaterials().IsValidIndex(MaterialIndex)
+				? Mesh->GetStaticMaterials()[MaterialIndex].MaterialSlotName : NAME_None;
+		}
+		if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(MeshObject))
+		{
+			return Mesh->GetMaterials().IsValidIndex(MaterialIndex)
+				? Mesh->GetMaterials()[MaterialIndex].MaterialSlotName : NAME_None;
+		}
+		return NAME_None;
+	}
+
+	static UMaterialInterface* GetMaterial(const UObject* MeshObject, int32 MaterialIndex)
+	{
+		if (const UStaticMesh* Mesh = Cast<UStaticMesh>(MeshObject))
+		{
+			return Mesh->GetStaticMaterials().IsValidIndex(MaterialIndex)
+				? Mesh->GetStaticMaterials()[MaterialIndex].MaterialInterface : nullptr;
+		}
+		if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(MeshObject))
+		{
+			return Mesh->GetMaterials().IsValidIndex(MaterialIndex)
+				? Mesh->GetMaterials()[MaterialIndex].MaterialInterface : nullptr;
+		}
+		return nullptr;
+	}
+
+	static void SetMaterial(UObject* MeshObject, int32 MaterialIndex, UMaterialInterface* Material)
+	{
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(MeshObject))
+		{
+			StaticMesh->GetStaticMaterials()[MaterialIndex].MaterialInterface = Material;
+		}
+		else if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(MeshObject))
+		{
+			SkeletalMesh->GetMaterials()[MaterialIndex].MaterialInterface = Material;
+		}
+	}
+
+	static void CollectMaterialSlots(const UObject* MeshObject, TArray<FBridgeMeshMaterialSlot>& OutSlots)
+	{
+		OutSlots.Reset();
+		if (const UStaticMesh* Mesh = Cast<UStaticMesh>(MeshObject))
+		{
+			const TArray<FStaticMaterial>& Materials = Mesh->GetStaticMaterials();
+			OutSlots.Reserve(Materials.Num());
+			for (int32 Index = 0; Index < Materials.Num(); ++Index)
+			{
+				const FStaticMaterial& Material = Materials[Index];
+				FBridgeMeshMaterialSlot& Slot = OutSlots.AddDefaulted_GetRef();
+				Slot.MaterialIndex = Index;
+				Slot.SlotName = Material.MaterialSlotName.ToString();
+#if WITH_EDITORONLY_DATA
+				Slot.ImportedSlotName = Material.ImportedMaterialSlotName.ToString();
+#endif
+				Slot.MaterialAssetPath = Material.MaterialInterface
+					? Material.MaterialInterface->GetPathName() : FString();
+			}
+			return;
+		}
+
+		if (const USkeletalMesh* Mesh = Cast<USkeletalMesh>(MeshObject))
+		{
+			const TArray<FSkeletalMaterial>& Materials = Mesh->GetMaterials();
+			OutSlots.Reserve(Materials.Num());
+			for (int32 Index = 0; Index < Materials.Num(); ++Index)
+			{
+				const FSkeletalMaterial& Material = Materials[Index];
+				FBridgeMeshMaterialSlot& Slot = OutSlots.AddDefaulted_GetRef();
+				Slot.MaterialIndex = Index;
+				Slot.SlotName = Material.MaterialSlotName.ToString();
+#if WITH_EDITORONLY_DATA
+				Slot.ImportedSlotName = Material.ImportedMaterialSlotName.ToString();
+#endif
+				Slot.MaterialAssetPath = Material.MaterialInterface
+					? Material.MaterialInterface->GetPathName() : FString();
+			}
+		}
+	}
+
+	static bool ResolveMaterialIndex(
+		const UObject* MeshObject,
+		const FBridgeMeshMaterialAssignment& Assignment,
+		int32& OutMaterialIndex,
+		FString& OutError)
+	{
+		const int32 MaterialCount = GetMaterialCount(MeshObject);
+		const FString TrimmedSlotName = Assignment.SlotName.TrimStartAndEnd();
+
+		if (Assignment.MaterialIndex >= 0)
+		{
+			if (Assignment.MaterialIndex >= MaterialCount)
+			{
+				OutError = FString::Printf(TEXT("material index %d is outside [0, %d)"),
+					Assignment.MaterialIndex, MaterialCount);
+				return false;
+			}
+			OutMaterialIndex = Assignment.MaterialIndex;
+			if (!TrimmedSlotName.IsEmpty() &&
+				GetMaterialSlotName(MeshObject, OutMaterialIndex) != FName(*TrimmedSlotName))
+			{
+				OutError = FString::Printf(
+					TEXT("slot guard '%s' does not match material index %d ('%s')"),
+					*TrimmedSlotName,
+					OutMaterialIndex,
+					*GetMaterialSlotName(MeshObject, OutMaterialIndex).ToString());
+				return false;
+			}
+			return true;
+		}
+
+		if (TrimmedSlotName.IsEmpty())
+		{
+			OutError = TEXT("each assignment requires MaterialIndex >= 0 or a non-empty SlotName");
+			return false;
+		}
+
+		const FName WantedName(*TrimmedSlotName);
+		int32 MatchCount = 0;
+		OutMaterialIndex = INDEX_NONE;
+		for (int32 Index = 0; Index < MaterialCount; ++Index)
+		{
+			if (GetMaterialSlotName(MeshObject, Index) == WantedName)
+			{
+				OutMaterialIndex = Index;
+				++MatchCount;
+			}
+		}
+		if (MatchCount == 0)
+		{
+			OutError = FString::Printf(TEXT("material slot '%s' was not found"), *TrimmedSlotName);
+			return false;
+		}
+		if (MatchCount > 1)
+		{
+			OutError = FString::Printf(
+				TEXT("material slot '%s' is ambiguous (%d matches); use MaterialIndex"),
+				*TrimmedSlotName, MatchCount);
+			return false;
+		}
+		return true;
+	}
+
+	static UMaterialInterface* LoadMaterial(const FString& MaterialAssetPath)
+	{
+		if (MaterialAssetPath.TrimStartAndEnd().IsEmpty())
+		{
+			return nullptr;
+		}
+		FString ObjectPath;
+		BridgeAssetOps::ParsePathToObjectPath(MaterialAssetPath, ObjectPath);
+		return LoadObject<UMaterialInterface>(nullptr, *ObjectPath);
+	}
+
+	static FProperty* GetMaterialsProperty(UObject* MeshObject)
+	{
+		if (Cast<UStaticMesh>(MeshObject))
+		{
+			return FindFProperty<FProperty>(
+				UStaticMesh::StaticClass(), UStaticMesh::GetStaticMaterialsName());
+		}
+		if (Cast<USkeletalMesh>(MeshObject))
+		{
+			return FindFProperty<FProperty>(
+				USkeletalMesh::StaticClass(), USkeletalMesh::GetMaterialsMemberName());
+		}
+		return nullptr;
+	}
 }
 
 FBridgeStaticMeshInfo UUnrealBridgeAssetLibrary::GetStaticMeshInfo(const FString& AssetPath)
@@ -1321,6 +1531,175 @@ FBridgeSkeletalMeshInfo UUnrealBridgeAssetLibrary::GetSkeletalMeshInfo(const FSt
 	{
 		Out.PhysicsAssetPath = Phys->GetPathName();
 	}
+	return Out;
+}
+
+TArray<FBridgeMeshMaterialSlot> UUnrealBridgeAssetLibrary::GetMeshMaterialSlots(
+	const FString& MeshAssetPath)
+{
+	TArray<FBridgeMeshMaterialSlot> Out;
+	FString MeshType;
+	if (UObject* MeshObject = BridgeAssetIntrospection::LoadMeshAsset(MeshAssetPath, MeshType))
+	{
+		BridgeAssetIntrospection::CollectMaterialSlots(MeshObject, Out);
+	}
+	return Out;
+}
+
+FBridgeMeshMaterialEditResult UUnrealBridgeAssetLibrary::SetMeshMaterial(
+	const FString& MeshAssetPath,
+	int32 MaterialIndex,
+	const FString& MaterialAssetPath,
+	bool bSave)
+{
+	FBridgeMeshMaterialAssignment Assignment;
+	Assignment.MaterialIndex = MaterialIndex;
+	Assignment.MaterialAssetPath = MaterialAssetPath;
+	return SetMeshMaterials(MeshAssetPath, { Assignment }, bSave);
+}
+
+FBridgeMeshMaterialEditResult UUnrealBridgeAssetLibrary::SetMeshMaterialBySlotName(
+	const FString& MeshAssetPath,
+	const FString& SlotName,
+	const FString& MaterialAssetPath,
+	bool bSave)
+{
+	FBridgeMeshMaterialAssignment Assignment;
+	Assignment.SlotName = SlotName;
+	Assignment.MaterialAssetPath = MaterialAssetPath;
+	return SetMeshMaterials(MeshAssetPath, { Assignment }, bSave);
+}
+
+FBridgeMeshMaterialEditResult UUnrealBridgeAssetLibrary::SetMeshMaterials(
+	const FString& MeshAssetPath,
+	const TArray<FBridgeMeshMaterialAssignment>& Assignments,
+	bool bSave)
+{
+	using namespace BridgeAssetIntrospection;
+
+	FBridgeMeshMaterialEditResult Out;
+	UObject* MeshObject = LoadMeshAsset(MeshAssetPath, Out.MeshType);
+	if (!MeshObject)
+	{
+		Out.Error = FString::Printf(
+			TEXT("'%s' is not a loadable UStaticMesh or USkeletalMesh"), *MeshAssetPath);
+		return Out;
+	}
+
+	UPackage* Package = MeshObject->GetOutermost();
+	if (Assignments.IsEmpty())
+	{
+		Out.Error = TEXT("assignments is empty");
+		CollectMaterialSlots(MeshObject, Out.Slots);
+		Out.bPackageDirty = Package && Package->IsDirty();
+		return Out;
+	}
+
+	FProperty* MaterialsProperty = GetMaterialsProperty(MeshObject);
+	if (!MaterialsProperty)
+	{
+		Out.Error = TEXT("could not resolve the mesh Materials property");
+		CollectMaterialSlots(MeshObject, Out.Slots);
+		Out.bPackageDirty = Package && Package->IsDirty();
+		return Out;
+	}
+
+	struct FResolvedAssignment
+	{
+		int32 MaterialIndex = INDEX_NONE;
+		UMaterialInterface* Material = nullptr;
+	};
+	TArray<FResolvedAssignment> Resolved;
+	Resolved.Reserve(Assignments.Num());
+	TSet<int32> TargetedIndices;
+
+	// Validate the complete batch before opening a transaction or touching the asset.
+	for (int32 AssignmentIndex = 0; AssignmentIndex < Assignments.Num(); ++AssignmentIndex)
+	{
+		const FBridgeMeshMaterialAssignment& Assignment = Assignments[AssignmentIndex];
+		FResolvedAssignment& Entry = Resolved.AddDefaulted_GetRef();
+		FString ResolveError;
+		if (!ResolveMaterialIndex(MeshObject, Assignment, Entry.MaterialIndex, ResolveError))
+		{
+			Out.Error = FString::Printf(TEXT("assignment %d: %s"), AssignmentIndex, *ResolveError);
+			CollectMaterialSlots(MeshObject, Out.Slots);
+			Out.bPackageDirty = Package && Package->IsDirty();
+			return Out;
+		}
+		if (TargetedIndices.Contains(Entry.MaterialIndex))
+		{
+			Out.Error = FString::Printf(
+				TEXT("assignment %d targets material index %d more than once"),
+				AssignmentIndex, Entry.MaterialIndex);
+			CollectMaterialSlots(MeshObject, Out.Slots);
+			Out.bPackageDirty = Package && Package->IsDirty();
+			return Out;
+		}
+		TargetedIndices.Add(Entry.MaterialIndex);
+
+		Entry.Material = LoadMaterial(Assignment.MaterialAssetPath);
+		if (!Assignment.MaterialAssetPath.TrimStartAndEnd().IsEmpty() && !Entry.Material)
+		{
+			Out.Error = FString::Printf(
+				TEXT("assignment %d: material '%s' is not a loadable UMaterialInterface"),
+				AssignmentIndex, *Assignment.MaterialAssetPath);
+			CollectMaterialSlots(MeshObject, Out.Slots);
+			Out.bPackageDirty = Package && Package->IsDirty();
+			return Out;
+		}
+	}
+
+	for (const FResolvedAssignment& Entry : Resolved)
+	{
+		if (GetMaterial(MeshObject, Entry.MaterialIndex) != Entry.Material)
+		{
+			Out.ChangedIndices.Add(Entry.MaterialIndex);
+		}
+	}
+	Out.ChangedCount = Out.ChangedIndices.Num();
+
+	if (Out.ChangedCount > 0)
+	{
+		// UStaticMesh loads mesh descriptions before material transactions so Undo
+		// can serialize the complete asset safely. Match the engine's own setter.
+		if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(MeshObject))
+		{
+			for (int32 LODIndex = 0; LODIndex < StaticMesh->GetNumSourceModels(); ++LODIndex)
+			{
+				StaticMesh->GetMeshDescription(LODIndex);
+			}
+		}
+
+		FScopedTransaction Transaction(NSLOCTEXT(
+			"UnrealBridgeAsset", "SetMeshMaterials", "UnrealBridge: Set Mesh Materials"));
+		MeshObject->Modify();
+		MeshObject->PreEditChange(MaterialsProperty);
+		for (const FResolvedAssignment& Entry : Resolved)
+		{
+			SetMaterial(MeshObject, Entry.MaterialIndex, Entry.Material);
+		}
+		FPropertyChangedEvent ChangedEvent(MaterialsProperty, EPropertyChangeType::ValueSet);
+		MeshObject->PostEditChangeProperty(ChangedEvent);
+		MeshObject->MarkPackageDirty();
+
+		if (bSave)
+		{
+			TArray<UPackage*> Packages;
+			Packages.Add(Package);
+			if (!Package || !UEditorLoadingAndSavingUtils::SavePackages(Packages, false))
+			{
+				Out.Error = TEXT("material slots changed in memory, but the mesh package could not be saved");
+				CollectMaterialSlots(MeshObject, Out.Slots);
+				Out.bPackageDirty = Package && Package->IsDirty();
+				return Out;
+			}
+			Out.bSaved = true;
+		}
+	}
+
+	CollectMaterialSlots(MeshObject, Out.Slots);
+	Out.bPackageDirty = Package && Package->IsDirty();
+	Out.bSuccess = true;
 	return Out;
 }
 

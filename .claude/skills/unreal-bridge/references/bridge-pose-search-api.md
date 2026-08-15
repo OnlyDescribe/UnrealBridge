@@ -53,6 +53,38 @@ Top-level (authored) channel summary. Sub-channels (e.g. inside a `Group`) are N
 | `sample_time_offset` | Seconds of past/future the channel samples (negative = past). |
 | `sub_channel_count` | Immediate children — Group containers and Trajectory both have these. |
 
+## Schema (PSS) — write
+
+### `set_crashing_legs_channel(...) → FBridgePSSCrashingLegsChannelResult`
+
+Create or update the single authored Crashing Legs channel on a schema. The
+call is idempotent: rerunning it updates the existing channel instead of
+appending a duplicate. Bone names are validated against the schema skeleton.
+
+```python
+result = unreal.UnrealBridgePoseSearchLibrary.set_crashing_legs_channel(
+    schema_path='/Game/.../PSS_Locomotion',
+    left_thigh_bone='thigh_l',
+    right_thigh_bone='thigh_r',
+    left_foot_bone='foot_l',
+    right_foot_bone='foot_r',
+    weight=0.2,
+    allowed_tolerance=0.3,
+    use_continuing_pose=True,
+)
+if not result.success:
+    raise RuntimeError(result.error)
+unreal.EditorAssetLibrary.save_loaded_asset(
+    unreal.load_object(None, '/Game/.../PSS_Locomotion'))
+```
+
+`AllowedTolerance == 0` disables the filter without removing the channel,
+which makes runtime A/B tests reversible. The call finalizes and dirties the
+schema but does not save it or explicitly rebuild dependent databases; save
+the PSS, then request/wait for each dependent PSD index as separate calls.
+
+Result fields: `success`, `created`, `changed`, `channel_index`, `error`.
+
 ---
 
 ## Database (PSD) — read
@@ -201,7 +233,8 @@ Exit codes: `0` ready · `1` timeout · `2` database not loadable / build failed
 
 ## Schema authoring is partial
 
-This library exposes schema **reads** (info + channel list) but no write ops yet. To author a new schema or add a channel, fall back to:
+The dedicated Crashing Legs mutation above is supported. Other schema channel
+types are still read-only. To author a different channel type, fall back to:
 
 ```python
 pss = unreal.PoseSearchSchema.cast(unreal.load_object(None, '/Game/.../PSS_Foo'))

@@ -25,6 +25,68 @@ fail with "no such function on UnrealBridgeXxxLibrary".
 | `UnrealBridgeMaterialLibrary` | `EMaterialDomain::MD_*` enum values differ in scope; `MATUSAGE_Voxels` / `MATUSAGE_StaticMesh` don't exist in 5.4 |
 | `UnrealBridgeNavigationLibrary` | `ARecastNavMesh::GetDebugGeometryForTile` 2nd arg type changed (`int32` → `FNavTileRef`) and the "default tile = aggregate all" sentinel doesn't exist on 5.4 |
 
+### Whole-library safe-stub gates
+
+`UnrealBridgeStateTreeLibrary` keeps its reflected class and kwargs wrapper on
+all supported engines, but its real implementation is gated by
+`!UE_VERSION_OLDER_THAN(5, 7, 0)`. UE 5.3-5.6 compile generated safe stubs;
+`IsStateTreeApiAvailable()` returns false and
+`GetLastStateTreeError()` explains the version requirement. This preserves a
+stable automation surface without compiling against StateTree editor APIs whose
+data model and property-binding contracts changed substantially before 5.7.
+
+`UnrealBridgeSmartObjectLibrary` uses the same reflected-header plus generated
+inverse-stub pattern. Its 80 authoring, world, collection, runtime claim, and
+entrance APIs are functional on UE 5.7+; on UE 5.3-5.6,
+`IsSmartObjectApiAvailable()` returns false and
+`GetLastSmartObjectError()` explains the requirement. The `SmartObjectsModule`,
+`SmartObjectsEditorModule`, and `WorldConditions` module dependencies are added
+from `UnrealBridge.Build.cs` only for UE 5.7+, and the plugin references are
+optional, so UE 5.3 can still resolve and compile the descriptor even though it
+does not ship the SmartObjects plugin.
+
+`UnrealBridgeRigLibrary` also uses the reflected-header plus generated
+inverse-stub pattern. Its 98 Control Rig hierarchy/RigVM, IK Rig solver/goal/
+chain, IK Retargeter mapping/pose/profile/batch, transient evaluation, and
+animation-quality APIs are functional on UE 5.7+. On UE 5.3-5.6,
+`IsRigApiAvailable()` returns false and `GetLastRigError()` reports that the
+real implementation requires UE 5.7+, while every other call logs the same
+actionable requirement and returns a safe empty result. Control Rig, RigVM,
+and IK Rig editor data models changed substantially before 5.7, so their
+module dependencies are added only on 5.7+; the `ControlRig` and `IKRig`
+plugin descriptor dependencies are optional so they do not block older engine
+builds.
+
+`UnrealBridgeNiagaraLibrary` follows the same reflected-header plus generated
+inverse-stub pattern. Its 64 System/Emitter lifecycle and recipe, stack module
+and input, parameter, renderer/material/binding, compiler/audit, production
+preset, and transient preview APIs are functional on UE 5.7+. On UE 5.3-5.6,
+`IsNiagaraApiAvailable()` returns false and `GetLastNiagaraError()` reports
+that the real implementation requires UE 5.7+, while every other call logs the
+same actionable requirement and returns a safe empty result. Niagara editor
+stack and graph contracts changed substantially before 5.7, so the `Niagara`,
+`NiagaraCore`, `NiagaraEditor`, and `NiagaraShader` module dependencies are
+added only on 5.7+; the `Niagara` plugin descriptor dependency is optional so
+it does not block older engine builds.
+
+### In-library safe no-op gate: UMG MVVM
+
+`UnrealBridgeUMGLibrary` itself remains fully reflected on every supported
+engine: Widget Blueprint/tree/layout/style authoring, widget animations,
+UI-material brush assignment, compile validation, and non-MVVM PIE validation
+all compile normally on UE 5.3-5.6. Its 11 MVVM-specific authoring/runtime
+functions use in-function `UE_VERSION_OLDER_THAN(5, 7, 0)` gates because the
+ModelViewViewModel editor/runtime contracts used here are 5.7 APIs. On an older
+engine each call logs that MVVM requires UE 5.7+ and returns its safe empty or
+false result; the UFUNCTION remains present, so agents get a stable wrapper and
+an actionable diagnostic instead of a missing method or failed build.
+
+`FieldNotification`, `ModelViewViewModel`, and `ModelViewViewModelBlueprint`
+are added by `UnrealBridge.Build.cs` only on UE 5.7+, and the
+`ModelViewViewModel` plugin reference is optional. This is an in-library gate,
+not a generated whole-library stub, because most UMG functionality has no MVVM
+dependency and remains useful on lower versions.
+
 ## Single-UFUNCTION gates (library still works, one function unavailable on 5.4)
 
 | UFUNCTION | Reason |
@@ -35,10 +97,13 @@ fail with "no such function on UnrealBridgeXxxLibrary".
 
 ## Inline shims (function works on both, different code paths)
 
-These remain callable on 5.4 — the macro picks the right code path internally.
+These remain callable on every supported engine version; the macro picks the
+appropriate code path internally.
 
-| Function | What 5.4 lacks | Shim |
+| Function | What older engines lack | Shim |
 |---|---|---|
+| `UnrealBridgeAnimLibrary::CopyAndApplyAnimationModifiers` | 5.5 lacks `UAnimationModifiersAssetUserData::AddAnimationModifierOfClass` | Existing matching modifiers are still copied and applied; when a target modifier would need to be created, log a warning and skip that modifier on 5.5 and older |
+| `UnrealBridgeEditorLibrary::CaptureActiveViewportAsDisplayed` | 5.5 lacks `FWindowsWindow::GetWindowPixels` | Log a warning and use the existing Slate screenshot fallback on 5.5 and older |
 | `UnrealBridgeAnimLibrary::SetAnimStateDefault` | `UAnimStateEntryNode::GetOutputPin()` | walk `Entry->Pins[]` for the first `EGPD_Output` pin |
 | `UnrealBridgeGameplayAbilityLibrary::GetGameplayAbilityBlueprintInfo` and `ListGameplayAbilitiesByTag` | `UGameplayAbility::GetAssetTags()` | read legacy `CDO->AbilityTags` field |
 | `UnrealBridgeBlueprintLibrary::GetPIENodeCoverage` | `FKismetDebugUtilities::FindSourceNodeForCodeLocation` const-correctness | `const_cast<UFunction*>(Func)` |
@@ -52,6 +117,7 @@ These remain callable on 5.4 — the macro picks the right code path internally.
 | `UnrealBridgeChooserLibrary::DeleteChooserRow` | 5.8 changed `FChooserColumnBase::DeleteRows` from `const TArray<uint32>&` to `TArrayView<int>` | `#if !UE_VERSION_OLDER_THAN(5, 8, 0)`: build a stack `int[]` and pass `MakeArrayView`; legacy: keep the `TArray<uint32>` form |
 | `UnrealBridgeChooserLibrary::EvaluateChooser` debug-row readback | 5.8 renamed `UChooserTable::GetDebugSelectedRow() → int32` to `GetDebugSelectedRows() → const TArray<int32>&` (multi-row support) | `#if !UE_VERSION_OLDER_THAN(5, 8, 0)`: read `GetDebugSelectedRows()[0]` if non-empty, else `-1`; legacy: keep the singular `GetDebugSelectedRow()` |
 | `UnrealBridgeGeometryLibrary::DisplaceMeshFromTexture` | 5.8 inserted a new `FGeometryScriptAdaptiveTessellationOptions` parameter (position 5) into `UGeometryScriptLibrary_MeshDeformFunctions::ApplyDisplaceFromTextureMap` | `#if !UE_VERSION_OLDER_THAN(5, 8, 0)`: pass a default-constructed `FGeometryScriptAdaptiveTessellationOptions{}` between `Options` and `UVChannel`; legacy: omit the parameter |
+| `UnrealBridgeRigLibrary::BatchRetargetAnimations` | 5.8 deprecated the positional `UIKRetargetBatchOperation::DuplicateAndRetarget` API, inserted target-path/source-path arguments, and introduced `FIKRetargetBatchOperationInputs` + `RunBatchRetarget` | On 5.8+, populate the input struct and pass the destination directly to `RunBatchRetarget`; on 5.7, use `DuplicateAndRetarget` and move the returned assets through AssetTools. The bridge UFUNCTION signature and result remain identical. |
 
 ## How the gate macro works
 
@@ -104,19 +170,28 @@ break is in `SharedPCH.UnrealEd.Cpp20.cpp`, an engine TU. Plugin
 5.3 / 5.4 don't expose a user-configurable `AdditionalArguments` knob
 for cl.exe flags.
 
-**The project does not patch the engine.** If you're contributing on a
-machine with MSVC ≥ 14.44 and need to verify 5.3 / 5.4 locally, you
-have two options — both **outside** the repo:
+**The project does not patch the engine.** Install MSVC 14.38 side-by-side
+via the Visual Studio Installer. For a 5.3 / 5.4 verification run, temporarily
+set the global UBT configuration to:
 
-1. Install an older MSVC (≤ 14.40, i.e. VS 2022 17.10) side-by-side
-   via the Visual Studio Installer; pin UE 5.3 / 5.4 to it via
-   `WindowsPlatform.CompilerVersion` in
-   `%APPDATA%/Unreal Engine/UnrealBuildTool/BuildConfiguration.xml`.
-2. Apply the 5.7 fix to your local engine install manually (one file,
-   one `#elif` replacement). **Don't commit this to UnrealBridge**, and
-   re-apply if the Launcher re-verifies.
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <WindowsPlatform>
+    <Compiler>VisualStudio2022</Compiler>
+    <CompilerVersion>14.38.33130</CompilerVersion>
+  </WindowsPlatform>
+</Configuration>
+```
 
-If neither option is convenient, disable 5.3 / 5.4 in your local
+The file is `%APPDATA%/Unreal Engine/UnrealBuildTool/BuildConfiguration.xml`.
+Save its existing contents first and restore them immediately after the
+affected builds. UE 5.4's UBT does not map arbitrary environment variables to
+XML config fields, so an `env` entry in `tools/engines.local.json` cannot pin
+this compiler version. Never work around this by editing engine headers.
+
+If temporarily changing the UBT configuration is not convenient, disable
+5.3 / 5.4 in your local
 `tools/engines.local.json` (gitignored) so build_matrix skips them —
 plugin code is still version-compatible, it just can't be verified
 against those engines on your toolchain.

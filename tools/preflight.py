@@ -113,7 +113,7 @@ def check_visual_studio() -> CheckResult:
                 [str(vswhere), "-latest", "-products", "*",
                  "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                  "-format", "json"],
-                capture_output=True, text=True, encoding="utf-8", timeout=15,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 installs = json.loads(proc.stdout)
@@ -221,7 +221,7 @@ def check_gpu() -> CheckResult:
              "Get-CimInstance Win32_VideoController | "
              "Select-Object Name, AdapterRAM, DriverVersion | "
              "ConvertTo-Json -Compress"],
-            capture_output=True, text=True, encoding="utf-8", timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
     except (subprocess.TimeoutExpired, OSError) as e:
         return CheckResult("GPU", "WARN", f"probe failed: {e}")

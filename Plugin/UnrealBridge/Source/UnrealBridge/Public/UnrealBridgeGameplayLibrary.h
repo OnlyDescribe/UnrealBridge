@@ -4,6 +4,9 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "UnrealBridgeGameplayLibrary.generated.h"
 
+class UAnimInstance;
+class USkeletalMeshComponent;
+
 /** One entry in FAgentObservation.VisibleActors. Intentionally flat so the
  *  Python binding returns a plain struct-of-primitives per actor without
  *  any UObject indirection. */
@@ -1444,6 +1447,18 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
 	static FString GetPlayerPawnActorName();
+
+	/**
+	 * Resolve a skeletal mesh component on the PIE player pawn. Empty
+	 * ComponentName prefers ACharacter::GetMesh(), then the first skeletal
+	 * mesh component. A non-empty name must match the component object name.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static USkeletalMeshComponent* GetPlayerSkeletalMeshComponent(const FString& ComponentName = TEXT(""));
+
+	/** AnimInstance currently owned by GetPlayerSkeletalMeshComponent(). */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static UAnimInstance* GetPlayerAnimInstance(const FString& ComponentName = TEXT(""));
 
 	/**
 	 * FName of the first `APlayerStart` actor in the PIE world (or the

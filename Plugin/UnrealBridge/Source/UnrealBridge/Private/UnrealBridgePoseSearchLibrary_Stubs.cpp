@@ -21,6 +21,12 @@ TArray<FBridgePSSChannel> UUnrealBridgePoseSearchLibrary::ListSchemaChannels(con
 	return TArray<FBridgePSSChannel>{};
 }
 
+FBridgePSSCrashingLegsChannelResult UUnrealBridgePoseSearchLibrary::SetCrashingLegsChannel(const FString& SchemaPath, const FString& LeftThighBone, const FString& RightThighBone, const FString& LeftFootBone, const FString& RightFootBone, float Weight, float AllowedTolerance, bool bUseContinuingPose)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePoseSearchLibrary::SetCrashingLegsChannel requires UE 5.7+ — call ignored on this engine version"));
+	return FBridgePSSCrashingLegsChannelResult{};
+}
+
 FBridgePSDInfo UUnrealBridgePoseSearchLibrary::GetDatabaseInfo(const FString& DatabasePath)
 {
 	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgePoseSearchLibrary::GetDatabaseInfo requires UE 5.7+ — call ignored on this engine version"));

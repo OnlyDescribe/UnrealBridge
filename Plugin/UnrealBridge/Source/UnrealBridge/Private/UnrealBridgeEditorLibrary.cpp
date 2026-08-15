@@ -34,6 +34,7 @@
 #include "UObject/Package.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Misc/EngineVersionComparison.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectGlobals.h"
 #include "HighResScreenshot.h"
@@ -48,6 +49,7 @@
 #include "Misc/Paths.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "Widgets/SViewport.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Interfaces/IMainFrameModule.h"
 #include "ShaderCompiler.h"
@@ -83,6 +85,10 @@
 #include "UnrealBridgeCallLog.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
 #include "UObject/UnrealType.h"
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#include "Windows/WindowsWindow.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "UnrealBridgeEditor"
 
@@ -1049,6 +1055,220 @@ namespace BridgeEditorImpl
 		OutSource.Reset();
 		return nullptr;
 	}
+
+	// Resolve the Slate widget that presents the same viewport chosen by
+	// GetCaptureViewport. Capturing this widget (instead of FViewport pixels)
+	// includes the final editor/game overlays composed by Slate.
+	TSharedPtr<SViewport> GetCaptureViewportWidget(FString& OutSource)
+	{
+		if (GEditor && GEditor->PlayWorld && GEngine)
+		{
+			TSharedPtr<SViewport> ViewportWidget = GEngine->GetGameViewportWidget();
+			if (!ViewportWidget.IsValid() && GEngine->GameViewport)
+			{
+				ViewportWidget = GEngine->GameViewport->GetGameViewportWidget();
+			}
+			if (ViewportWidget.IsValid())
+			{
+				OutSource = TEXT("PIE");
+				return ViewportWidget;
+			}
+		}
+
+		if (FModuleManager::Get().IsModuleLoaded("LevelEditor"))
+		{
+			FLevelEditorModule& LevelEditor = FModuleManager::GetModuleChecked<FLevelEditorModule>("LevelEditor");
+			if (TSharedPtr<SLevelViewport> LevelViewport = LevelEditor.GetFirstActiveLevelViewport())
+			{
+				if (TSharedPtr<SViewport> ViewportWidget = LevelViewport->GetViewportWidget().Pin())
+				{
+					OutSource = TEXT("LevelEditor");
+					return ViewportWidget;
+				}
+			}
+		}
+
+		OutSource.Reset();
+		return nullptr;
+	}
+
+	bool CapturePresentedViewportPixels(
+		const TSharedRef<SViewport>& ViewportWidget,
+		TArray<FColor>& OutBitmap,
+		FIntPoint& OutSize,
+		FString& OutError)
+	{
+#if PLATFORM_WINDOWS
+#if UE_VERSION_OLDER_THAN(5, 6, 0)
+		OutBitmap.Reset();
+		OutSize = FIntPoint::ZeroValue;
+		OutError = TEXT("Native-window viewport readback requires Unreal Engine 5.6 or newer; using the Slate screenshot fallback.");
+		UE_LOG(LogTemp, Warning, TEXT("UnrealBridge: CaptureActiveViewportAsDisplayed: %s"), *OutError);
+		return false;
+#else
+		const TSharedPtr<SWindow> WidgetWindow = FSlateApplication::Get().FindWidgetWindow(ViewportWidget);
+		if (!WidgetWindow.IsValid())
+		{
+			OutError = TEXT("The active viewport is not attached to a Slate window.");
+			return false;
+		}
+
+		const TSharedPtr<FGenericWindow> NativeWindow = WidgetWindow->GetNativeWindow();
+		if (!NativeWindow.IsValid() || !NativeWindow->GetOSWindowHandle())
+		{
+			OutError = TEXT("The active viewport has no native window handle.");
+			return false;
+		}
+
+		uint32 WindowWidth = 0;
+		uint32 WindowHeight = 0;
+		FWindowsWindow* WindowsWindow = static_cast<FWindowsWindow*>(NativeWindow.Get());
+		TArray<FColor> WindowPixels = WindowsWindow->GetWindowPixels(WindowWidth, WindowHeight);
+		const int64 WindowPixelCount = static_cast<int64>(WindowWidth) * static_cast<int64>(WindowHeight);
+		if (WindowWidth == 0 || WindowHeight == 0
+			|| WindowPixelCount > MAX_int32 || WindowPixels.Num() < WindowPixelCount)
+		{
+			OutError = TEXT("Native window readback returned no usable pixels.");
+			return false;
+		}
+
+		POINT ClientOrigin{0, 0};
+		const HWND WindowHandle = static_cast<HWND>(NativeWindow->GetOSWindowHandle());
+		if (!::ClientToScreen(WindowHandle, &ClientOrigin))
+		{
+			OutError = TEXT("Could not resolve the native window client origin.");
+			return false;
+		}
+
+		const FGeometry& Geometry = ViewportWidget->GetCachedGeometry();
+		const FVector2f AbsolutePosition = FVector2f(Geometry.GetAbsolutePosition());
+		const FVector2f AbsoluteSize = FVector2f(Geometry.GetAbsoluteSize());
+		const int32 MinX = FMath::RoundToInt(AbsolutePosition.X) - ClientOrigin.x;
+		const int32 MinY = FMath::RoundToInt(AbsolutePosition.Y) - ClientOrigin.y;
+		const int32 CaptureWidth = FMath::RoundToInt(AbsoluteSize.X);
+		const int32 CaptureHeight = FMath::RoundToInt(AbsoluteSize.Y);
+		const int64 CapturePixelCount = static_cast<int64>(CaptureWidth) * static_cast<int64>(CaptureHeight);
+		if (CaptureWidth <= 0 || CaptureHeight <= 0 || CapturePixelCount > MAX_int32
+			|| MinX < 0 || MinY < 0
+			|| static_cast<int64>(MinX) + CaptureWidth > WindowWidth
+			|| static_cast<int64>(MinY) + CaptureHeight > WindowHeight)
+		{
+			OutError = FString::Printf(
+				TEXT("Viewport rect (%d,%d %dx%d) is outside native client pixels (%ux%u)."),
+				MinX, MinY, CaptureWidth, CaptureHeight, WindowWidth, WindowHeight);
+			return false;
+		}
+
+		OutBitmap.SetNumUninitialized(static_cast<int32>(CapturePixelCount));
+		for (int32 Row = 0; Row < CaptureHeight; ++Row)
+		{
+			const FColor* SourceRow = WindowPixels.GetData()
+				+ (MinY + Row) * static_cast<int32>(WindowWidth) + MinX;
+			FColor* DestRow = OutBitmap.GetData() + Row * CaptureWidth;
+			FMemory::Memcpy(DestRow, SourceRow, CaptureWidth * sizeof(FColor));
+		}
+
+		OutSize = FIntPoint(CaptureWidth, CaptureHeight);
+		OutError.Reset();
+		return true;
+#endif
+#else
+		OutError = TEXT("Native-window viewport readback is unavailable on this platform.");
+		return false;
+#endif
+	}
+
+	FBridgeScreenshotResult EncodeScreenshot(
+		TArray<FColor>& Bitmap,
+		const FIntPoint Size,
+		const FString& Source,
+		const FString& OutFilePath,
+		const bool bIncludeBase64)
+	{
+		FBridgeScreenshotResult R;
+		R.Source = Source;
+		R.Width = Size.X;
+		R.Height = Size.Y;
+
+		if (Size.X <= 0 || Size.Y <= 0)
+		{
+			R.Error = FString::Printf(TEXT("Screenshot has invalid size (%dx%d)."), Size.X, Size.Y);
+			return R;
+		}
+		if (OutFilePath.IsEmpty() && !bIncludeBase64)
+		{
+			R.Error = TEXT("Either OutFilePath must be non-empty or bIncludeBase64 must be true.");
+			return R;
+		}
+
+		const int64 RequiredPixelCount = static_cast<int64>(Size.X) * static_cast<int64>(Size.Y);
+		if (RequiredPixelCount > MAX_int32 || Bitmap.Num() < RequiredPixelCount)
+		{
+			R.Error = FString::Printf(
+				TEXT("Screenshot returned %d pixels for a %dx%d image."),
+				Bitmap.Num(), Size.X, Size.Y);
+			return R;
+		}
+		if (Bitmap.Num() > RequiredPixelCount)
+		{
+			Bitmap.SetNum(static_cast<int32>(RequiredPixelCount), EAllowShrinking::No);
+		}
+
+		// Viewport and Slate readback may carry alpha=0. The output represents
+		// an opaque screen image, so normalize alpha before PNG compression.
+		for (FColor& Color : Bitmap)
+		{
+			Color.A = 255;
+		}
+
+		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		TSharedPtr<IImageWrapper> PNG = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+		if (!PNG.IsValid()
+			|| !PNG->SetRaw(Bitmap.GetData(), Bitmap.Num() * sizeof(FColor), Size.X, Size.Y, ERGBFormat::BGRA, 8))
+		{
+			R.Error = TEXT("Failed to initialize PNG image wrapper.");
+			return R;
+		}
+
+		const TArray64<uint8>& Compressed = PNG->GetCompressed();
+		if (Compressed.Num() == 0)
+		{
+			R.Error = TEXT("PNG encoding produced no bytes.");
+			return R;
+		}
+
+		if (!OutFilePath.IsEmpty())
+		{
+			const FString AbsPath = FPaths::ConvertRelativePathToFull(OutFilePath);
+			const FString DirOnly = FPaths::GetPath(AbsPath);
+			if (!DirOnly.IsEmpty())
+			{
+				IFileManager::Get().MakeDirectory(*DirOnly, /*Tree=*/true);
+			}
+			if (!FFileHelper::SaveArrayToFile(Compressed, *AbsPath))
+			{
+				R.Error = FString::Printf(TEXT("Failed to write PNG to '%s'."), *AbsPath);
+				return R;
+			}
+			R.FilePath = AbsPath;
+		}
+
+		if (bIncludeBase64)
+		{
+			// FBase64 operates on 32-bit-sized buffers. Normal viewport PNGs are
+			// far smaller, but retain an explicit guard before narrowing.
+			const int64 Num = Compressed.Num();
+			if (Num > MAX_int32)
+			{
+				R.Error = TEXT("PNG too large to base64-encode.");
+				return R;
+			}
+			R.Base64 = FBase64::Encode(Compressed.GetData(), static_cast<uint32>(Num));
+		}
+
+		R.bSuccess = true;
+		return R;
+	}
 }
 
 FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewport(const FString& OutFilePath, bool bIncludeBase64)
@@ -1061,17 +1281,16 @@ FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewport(const 
 		R.Error = TEXT("No active viewport available.");
 		return R;
 	}
+	if (OutFilePath.IsEmpty() && !bIncludeBase64)
+	{
+		R.Error = TEXT("Either OutFilePath must be non-empty or bIncludeBase64 must be true.");
+		return R;
+	}
 
 	const FIntPoint Size = Viewport->GetSizeXY();
 	if (Size.X <= 0 || Size.Y <= 0)
 	{
 		R.Error = FString::Printf(TEXT("Viewport has zero size (%dx%d)."), Size.X, Size.Y);
-		return R;
-	}
-
-	if (OutFilePath.IsEmpty() && !bIncludeBase64)
-	{
-		R.Error = TEXT("Either OutFilePath must be non-empty or bIncludeBase64 must be true.");
 		return R;
 	}
 
@@ -1088,145 +1307,75 @@ FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewport(const 
 		R.Error = TEXT("Viewport->ReadPixels returned no data.");
 		return R;
 	}
-	// FColor from the viewport sometimes carries alpha=0; opaque PNGs are
-	// what callers want.
-	for (FColor& C : Bitmap)
-	{
-		C.A = 255;
-	}
-
-	IImageWrapperModule& IWM = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
-	TSharedPtr<IImageWrapper> PNG = IWM.CreateImageWrapper(EImageFormat::PNG);
-	if (!PNG.IsValid() || !PNG->SetRaw(Bitmap.GetData(), Bitmap.Num() * sizeof(FColor), Size.X, Size.Y, ERGBFormat::BGRA, 8))
-	{
-		R.Error = TEXT("Failed to initialize PNG image wrapper.");
-		return R;
-	}
-	const TArray64<uint8>& Compressed = PNG->GetCompressed();
-	if (Compressed.Num() == 0)
-	{
-		R.Error = TEXT("PNG encoding produced no bytes.");
-		return R;
-	}
-
-	R.Width = Size.X;
-	R.Height = Size.Y;
-
-	if (!OutFilePath.IsEmpty())
-	{
-		FString AbsPath = FPaths::ConvertRelativePathToFull(OutFilePath);
-		const FString DirOnly = FPaths::GetPath(AbsPath);
-		if (!DirOnly.IsEmpty())
-		{
-			IFileManager::Get().MakeDirectory(*DirOnly, /*Tree=*/true);
-		}
-		if (!FFileHelper::SaveArrayToFile(Compressed, *AbsPath))
-		{
-			R.Error = FString::Printf(TEXT("Failed to write PNG to '%s'."), *AbsPath);
-			return R;
-		}
-		R.FilePath = AbsPath;
-	}
-
-	if (bIncludeBase64)
-	{
-		// FBase64 operates on 32-bit-sized buffers; PNG captures for editor
-		// viewports comfortably fit under 2 GB, but guard the cast anyway.
-		const int64 Num = Compressed.Num();
-		if (Num > (int64)MAX_int32)
-		{
-			R.Error = TEXT("PNG too large to base64-encode.");
-			return R;
-		}
-		R.Base64 = FBase64::Encode(Compressed.GetData(), (uint32)Num);
-	}
-
-	R.bSuccess = true;
-	return R;
+	return BridgeEditorImpl::EncodeScreenshot(Bitmap, Size, R.Source, OutFilePath, bIncludeBase64);
 }
 
-FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureGameViewportWithUI(
-	const FString& OutFilePath, bool bIncludeBase64)
+FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewportAsDisplayed(
+	const FString& OutFilePath,
+	bool bIncludeBase64)
 {
 	FBridgeScreenshotResult R;
-	R.Source = TEXT("PIESlate");
-
-	if (!GEditor || !GEditor->PlayWorld || !GEngine || !GEngine->GameViewport)
-	{
-		R.Error = TEXT("PIE is not running or the game viewport is unavailable.");
-		return R;
-	}
 	if (OutFilePath.IsEmpty() && !bIncludeBase64)
 	{
 		R.Error = TEXT("Either OutFilePath must be non-empty or bIncludeBase64 must be true.");
 		return R;
 	}
+	if (!FSlateApplication::IsInitialized())
+	{
+		R.Error = TEXT("Slate application is not initialized.");
+		return R;
+	}
 
-	const TSharedPtr<SViewport> ViewportWidget = GEngine->GameViewport->GetGameViewportWidget();
+	TSharedPtr<SViewport> ViewportWidget = BridgeEditorImpl::GetCaptureViewportWidget(R.Source);
 	if (!ViewportWidget.IsValid())
 	{
-		R.Error = TEXT("The PIE game viewport has no valid Slate viewport widget.");
+		R.Error = TEXT("No active viewport Slate widget available.");
 		return R;
 	}
 
 	TArray<FColor> Bitmap;
-	FIntVector Size = FIntVector::ZeroValue;
-	if (!FSlateApplication::Get().TakeScreenshot(ViewportWidget.ToSharedRef(), Bitmap, Size)
-		|| Size.X <= 0 || Size.Y <= 0 || Bitmap.Num() < Size.X * Size.Y)
+	FIntPoint PresentedSize = FIntPoint::ZeroValue;
+	FString PresentedCaptureError;
+	if (BridgeEditorImpl::CapturePresentedViewportPixels(
+		ViewportWidget.ToSharedRef(), Bitmap, PresentedSize, PresentedCaptureError))
 	{
-		R.Error = TEXT("Slate failed to capture the composed PIE viewport.");
-		return R;
-	}
-	for (FColor& Color : Bitmap)
-	{
-		Color.A = 255;
+		return BridgeEditorImpl::EncodeScreenshot(
+			Bitmap, PresentedSize, R.Source, OutFilePath, bIncludeBase64);
 	}
 
-	IImageWrapperModule& IWM = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
-	TSharedPtr<IImageWrapper> PNG = IWM.CreateImageWrapper(EImageFormat::PNG);
-	if (!PNG.IsValid()
-		|| !PNG->SetRaw(Bitmap.GetData(), Bitmap.Num() * sizeof(FColor),
-			Size.X, Size.Y, ERGBFormat::BGRA, 8))
+	// Cross-platform fallback. This repaints the Slate window, so a one-frame
+	// debug primitive may already have expired; native readback above is the
+	// strict WYSIWYG path on Windows.
+	Bitmap.Reset();
+	FIntVector SlateSize = FIntVector::ZeroValue;
+	if (!FSlateApplication::Get().TakeScreenshot(ViewportWidget.ToSharedRef(), Bitmap, SlateSize)
+		|| Bitmap.Num() == 0)
 	{
-		R.Error = TEXT("Failed to initialize PNG image wrapper.");
-		return R;
-	}
-	const TArray64<uint8>& Compressed = PNG->GetCompressed();
-	if (Compressed.Num() == 0)
-	{
-		R.Error = TEXT("PNG encoding produced no bytes.");
+		R.Error = FString::Printf(
+			TEXT("Native window capture failed (%s); Slate fallback returned no data."),
+			*PresentedCaptureError);
 		return R;
 	}
 
-	R.Width = Size.X;
-	R.Height = Size.Y;
-	if (!OutFilePath.IsEmpty())
-	{
-		const FString AbsPath = FPaths::ConvertRelativePathToFull(OutFilePath);
-		const FString DirOnly = FPaths::GetPath(AbsPath);
-		if (!DirOnly.IsEmpty())
-		{
-			IFileManager::Get().MakeDirectory(*DirOnly, /*Tree=*/true);
-		}
-		if (!FFileHelper::SaveArrayToFile(Compressed, *AbsPath))
-		{
-			R.Error = FString::Printf(TEXT("Failed to write PNG to '%s'."), *AbsPath);
-			return R;
-		}
-		R.FilePath = AbsPath;
-	}
-	if (bIncludeBase64)
-	{
-		if (Compressed.Num() > static_cast<int64>(MAX_int32))
-		{
-			R.Error = TEXT("PNG too large to base64-encode.");
-			return R;
-		}
-		R.Base64 = FBase64::Encode(Compressed.GetData(), static_cast<uint32>(Compressed.Num()));
-	}
+	return BridgeEditorImpl::EncodeScreenshot(
+		Bitmap,
+		FIntPoint(SlateSize.X, SlateSize.Y),
+		R.Source,
+		OutFilePath,
+		bIncludeBase64);
+}
 
-	R.bSuccess = true;
-	return R;
+FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureGameViewportWithUI(
+	const FString& OutFilePath, bool bIncludeBase64)
+{
+	if (!GEditor || !GEditor->PlayWorld)
+	{
+		FBridgeScreenshotResult Result;
+		Result.Source = TEXT("PIESlate");
+		Result.Error = TEXT("PIE is not running or the game viewport is unavailable.");
+		return Result;
+	}
+	return CaptureActiveViewportAsDisplayed(OutFilePath, bIncludeBase64);
 }
 
 // ─── GBuffer channel capture ───────────────────────────────

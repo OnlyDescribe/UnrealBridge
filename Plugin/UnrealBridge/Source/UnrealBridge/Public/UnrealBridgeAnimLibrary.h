@@ -545,6 +545,25 @@ struct FBridgeBlendProfileEntry
 	float BlendScale = 0.f;
 };
 
+/** Read-back view of an authored Motion Warping notify state. */
+USTRUCT(BlueprintType)
+struct FBridgeMotionWarpingNotifyInfo
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Animation")
+	FName WarpTargetName = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Animation")
+	float StartTime = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Animation")
+	float EndTime = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Animation")
+	FString ModifierClass;
+};
+
 // ─── Library class ──────────────────────────────────────────
 
 UCLASS()
@@ -622,9 +641,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static bool AddAnimNotify(const FString& SequencePath, const FString& NotifyName, float TriggerTime, float Duration);
 
+	/**
+	 * Add one class-backed AnimNotifyState on a named notify track.
+	 * NotifyStateClassPath must resolve to a UAnimNotifyState subclass.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static bool AddAnimNotifyState(const FString& AnimationPath,
+		const FString& NotifyStateClassPath, FName NotifyTrackName,
+		float StartTime, float EndTime);
+
+	/** Remove every state notify whose class exactly matches NotifyStateClassPath. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static int32 RemoveAnimNotifyStatesByClass(const FString& AnimationPath,
+		const FString& NotifyStateClassPath);
+
 	/** Remove all notifies whose NotifyName matches (case-insensitive). Returns removed count. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static int32 RemoveAnimNotifiesByName(const FString& SequencePath, const FString& NotifyName);
+
+	/** Return every authored Motion Warping notify and its target/window. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static TArray<FBridgeMotionWarpingNotifyInfo> GetMotionWarpingNotifies(const FString& AnimationPath);
+
+	/**
+	 * Author exactly one Skew Warp notify for WarpTargetName.
+	 * Existing Motion Warping notifies for other targets are preserved; every existing
+	 * notify for the requested target is replaced. The package is marked dirty but not saved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static bool SetMotionWarpingNotify(const FString& AnimationPath, FName WarpTargetName,
+		float StartTime, float EndTime);
 
 	/** Set RateScale on an AnimSequence. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
@@ -632,14 +678,25 @@ public:
 
 	/**
 	 * Repair UEAnim-imported bone tracks in one or more AnimSequences.
-	 * Non-additive sequences can have character-specific secondary-motion tracks
-	 * removed by prefix. Additive sequences whose scale keys are centered around
-	 * one are converted to Unreal's zero-centered additive scale representation.
-	 * Returns one tab-separated summary row per input path.
+	 * Non-additive sequences can drop project-specific secondary-motion tracks
+	 * by prefix. Additive sequences with clearly zero-centered raw scale keys
+	 * are restored to identity-centered raw scale before Unreal evaluates the
+	 * additive delta. Returns one tab-separated summary row per input path.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
-	static TArray<FString> RepairImportedAnimSequenceTracks(const TArray<FString>& SequencePaths,
-		const TArray<FString>& SecondaryMotionBonePrefixes, bool bConvertUEAnimAdditiveScale);
+	static TArray<FString> RepairImportedAnimSequenceTracks(
+		const TArray<FString>& SequencePaths,
+		const TArray<FString>& SecondaryMotionBonePrefixes,
+		bool bConvertUEAnimAdditiveScale);
+
+	/**
+	 * Copy the configured Animation Modifier stack from SourceSequence to every target and apply it.
+	 * Existing target modifiers of the same class are updated in place; unrelated modifiers are preserved.
+	 * Returns the total number of modifier instances successfully applied. Assets are marked dirty but not saved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static int32 CopyAndApplyAnimationModifiers(const FString& SourceSequencePath,
+		const TArray<FString>& TargetSequencePaths);
 
 	/** Add a composite section to a montage. Returns false when name already exists or StartTime invalid. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
@@ -889,6 +946,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
 	static bool SetAnimGraphNodePosition(const FString& AnimBlueprintPath, const FString& GraphName,
 		const FString& NodeGuid, int32 PosX, int32 PosY);
+
+	/**
+	 * Append missing bones to an existing Pose Search History Collector node.
+	 * Existing entries and graph layout are preserved. Returns false when the
+	 * ABP, graph, node, target skeleton, or any requested bone is invalid.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")
+	static bool EnsurePoseHistoryCollectedBones(const FString& AnimBlueprintPath, const FString& GraphName,
+		const FString& NodeGuid, const TArray<FName>& BoneNames);
 
 	/** Change a SequencePlayer's bound sequence. Empty path clears the binding. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Animation")

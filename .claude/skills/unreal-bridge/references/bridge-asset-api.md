@@ -625,6 +625,95 @@ plus `skeleton_path`, `num_bones`, `num_morph_targets`,
 `physics_asset_path`, `num_sockets`, `socket_names`. Missing:
 `has_collision`, `has_nanite_data`, `num_uv_channels`.
 
+### Mesh asset material slots (StaticMesh + SkeletalMesh)
+
+Use these functions to inspect or author the **default material slots on the
+mesh asset itself**. They are distinct from
+`Level.set_actor_material(...)`, which only adds a component override to one
+actor instance.
+
+#### get_mesh_material_slots(mesh_asset_path) -> list[FBridgeMeshMaterialSlot]
+
+Unified slot query for either mesh type. Returns an empty list for a missing or
+unsupported asset.
+
+```python
+slots = AL.get_mesh_material_slots(mesh_asset_path='/Game/Characters/SK_Hero')
+for slot in slots:
+    print(slot.material_index, slot.slot_name, slot.material_asset_path)
+```
+
+Each slot contains `material_index`, `slot_name`, `imported_slot_name`, and
+`material_asset_path`. Slot/imported names are preserved by all setters.
+
+#### set_mesh_material(...), set_mesh_material_by_slot_name(...)
+
+Single-slot convenience functions. Both support StaticMesh and SkeletalMesh,
+are undoable, and accept an empty material path to clear the slot.
+
+```python
+# Persistent authoring change (save=True is the default).
+r = AL.set_mesh_material(
+    mesh_asset_path='/Game/Characters/SK_Hero',
+    material_index=0,
+    material_asset_path='/Game/Characters/Materials/MI_Hero',
+    save=True,
+)
+assert r.success, r.error
+
+# In-memory visual comparison. The package remains dirty and is not written.
+r = AL.set_mesh_material_by_slot_name(
+    mesh_asset_path='/Game/Props/SM_Door',
+    slot_name='DoorSurface',
+    material_asset_path='/Game/Props/Materials/MI_Door_Alt',
+    save=False,
+)
+```
+
+#### set_mesh_materials(mesh_asset_path, assignments, save=True)
+
+Atomic batch setter: all indices, names, duplicate targets, and material paths
+are validated before the mesh is touched. One invalid entry rejects the entire
+batch, so a multi-slot character cannot be left half-updated.
+
+```python
+import unreal
+
+assignments = [
+    unreal.BridgeMeshMaterialAssignment(
+        material_index=0,
+        # Optional guard: if supplied, it must match index 0.
+        slot_name='Body',
+        material_asset_path='/Game/Characters/Materials/MI_Body'),
+    unreal.BridgeMeshMaterialAssignment(
+        material_index=-1,             # resolve by slot name
+        slot_name='Boots',
+        material_asset_path='/Game/Characters/Materials/MI_Boots'),
+]
+r = AL.set_mesh_materials(
+    mesh_asset_path='/Game/Characters/SK_Hero',
+    assignments=assignments,
+    save=False,
+)
+assert r.success, r.error
+print(r.changed_count, list(r.changed_indices), r.package_dirty)
+```
+
+`FBridgeMeshMaterialEditResult` fields:
+
+- `success`: validation + in-memory mutation succeeded;
+- `saved`: this call actually wrote the mesh package to disk;
+- `package_dirty`: final package dirty state;
+- `mesh_type`: `"StaticMesh"` or `"SkeletalMesh"`;
+- `changed_count` / `changed_indices`: slots whose pointers changed;
+- `slots`: complete final slot state, including unchanged slots;
+- `error`: first validation/save failure. A save failure explicitly reports
+  that the in-memory mutation remains applied and dirty.
+
+> `save=False` does not mean "transient component override". It changes the
+> loaded mesh asset in memory, participates in Undo, and deliberately leaves
+> the package dirty. Reload or undo the asset after a temporary comparison.
+
 ### get_texture_info(asset_path) -> FBridgeTextureInfo
 
 Dimensions, pixel format (EPixelFormat name), compression settings,

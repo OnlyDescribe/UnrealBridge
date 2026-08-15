@@ -8,7 +8,7 @@ survive.
 
 Flow:
   1. ping bridge (bail out if the editor isn't up)
-  2. run sync_plugin.bat (unless --no-sync)
+  2. sync the plugin and matching skills (unless --no-sync)
   3. call UnrealBridgeEditorLibrary.TriggerLiveCodingCompile via bridge
   4. report Status (Success / NoChanges / Failure / ...)
 
@@ -16,7 +16,7 @@ Exit codes:
     0  Success or NoChanges
     1  bridge ping / exec failed
     2  Live Coding compile reported failure / not started
-    3  sync_plugin.bat failed
+    3  project sync failed
 """
 from __future__ import annotations
 
@@ -26,11 +26,10 @@ import pathlib
 import subprocess
 import sys
 
+from _project_sync import detect_project_root, run_project_sync
+
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 BRIDGE_PY  = SCRIPT_DIR / "bridge.py"
-# scripts -> unreal-bridge -> skills -> .claude -> <repo-root>
-REPO_ROOT  = SCRIPT_DIR.parents[3]
-SYNC_BAT   = REPO_ROOT / "sync_plugin.bat"
 
 
 def run_bridge(argv: list[str], capture: bool = True) -> subprocess.CompletedProcess:
@@ -132,7 +131,13 @@ def report_failure(result: dict) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--no-sync", action="store_true",
-                    help="Skip sync_plugin.bat (assume sources already copied).")
+                    help="Skip the plugin + skill sync (assume sources already copied).")
+    ap.add_argument("--project-dir",
+                    help="UE project root passed to the source-repo sync script. "
+                         "Defaults to the skill's containing project.")
+    ap.add_argument("--sync-source",
+                    help="UnrealBridge source-repo root. Defaults to the source "
+                         "marker written by sync_project.bat.")
     ap.add_argument("--no-wait", action="store_true",
                     help="Fire LC compile async and return immediately.")
     ap.add_argument("--timeout", type=int, default=300,
@@ -143,14 +148,24 @@ def main() -> int:
         return 1
 
     if not args.no_sync:
-        if not SYNC_BAT.exists():
-            sys.stderr.write(f"sync_plugin.bat not found at {SYNC_BAT}\n")
+        project_dir = (
+            pathlib.Path(args.project_dir).resolve()
+            if args.project_dir
+            else detect_project_root()
+        )
+        if project_dir is None:
+            sys.stderr.write(
+                "Could not detect the target UE project. Pass --project-dir.\n"
+            )
             return 3
-        print(f"[hot-reload] syncing plugin via {SYNC_BAT.name} ...")
-        sync = subprocess.run(["cmd.exe", "/c", str(SYNC_BAT)])
-        if sync.returncode != 0:
-            sys.stderr.write(f"sync_plugin.bat failed (rc={sync.returncode})\n")
-            return 3
+        rc = run_project_sync(
+            project_dir,
+            source_dir=args.sync_source,
+            verbose=True,
+            label="hot-reload",
+        )
+        if rc != 0:
+            return rc
 
     print("[hot-reload] triggering Live Coding compile ...")
     result = trigger_live_coding(wait=not args.no_wait, timeout=args.timeout)

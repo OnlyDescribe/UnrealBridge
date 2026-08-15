@@ -7,6 +7,7 @@
 #include "PoseSearch/PoseSearchDatabase.h"
 #include "PoseSearch/PoseSearchSchema.h"
 #include "PoseSearch/PoseSearchFeatureChannel.h"
+#include "PoseSearch/PoseSearchFeatureChannel_FilterCrashingLegs.h"
 #include "PoseSearch/PoseSearchNormalizationSet.h"
 #include "PoseSearch/PoseSearchIndex.h"
 
@@ -241,6 +242,164 @@ TArray<FBridgePSSChannel> UUnrealBridgePoseSearchLibrary::ListSchemaChannels(con
 	return Out;
 }
 
+FBridgePSSCrashingLegsChannelResult UUnrealBridgePoseSearchLibrary::SetCrashingLegsChannel(
+	const FString& SchemaPath,
+	const FString& LeftThighBone,
+	const FString& RightThighBone,
+	const FString& LeftFootBone,
+	const FString& RightFootBone,
+	float Weight,
+	float AllowedTolerance,
+	bool bUseContinuingPose)
+{
+	using namespace BridgePoseSearchImpl;
+	FBridgePSSCrashingLegsChannelResult Out;
+
+	UPoseSearchSchema* PSS = LoadSchema(SchemaPath);
+	if (!PSS)
+	{
+		Out.Error = FString::Printf(TEXT("Could not load PoseSearchSchema '%s'"), *SchemaPath);
+		return Out;
+	}
+
+	if (Weight < 0.f)
+	{
+		Out.Error = TEXT("Weight must be greater than or equal to zero");
+		return Out;
+	}
+	if (AllowedTolerance < 0.f)
+	{
+		Out.Error = TEXT("AllowedTolerance must be greater than or equal to zero");
+		return Out;
+	}
+
+	const TArray<FString> BoneNames = { LeftThighBone, RightThighBone, LeftFootBone, RightFootBone };
+	for (const FString& BoneName : BoneNames)
+	{
+		if (BoneName.IsEmpty())
+		{
+			Out.Error = TEXT("All four crashing-legs bone names are required");
+			return Out;
+		}
+	}
+
+	const FPoseSearchRoledSkeleton* ValidationSkeleton = nullptr;
+	for (const FPoseSearchRoledSkeleton& RoledSkeleton : PSS->GetRoledSkeletons())
+	{
+		if (RoledSkeleton.Skeleton)
+		{
+			ValidationSkeleton = &RoledSkeleton;
+			break;
+		}
+	}
+	if (!ValidationSkeleton)
+	{
+		Out.Error = TEXT("Schema has no valid skeleton for bone-name validation");
+		return Out;
+	}
+
+	const FReferenceSkeleton& RefSkeleton = ValidationSkeleton->Skeleton->GetReferenceSkeleton();
+	for (const FString& BoneName : BoneNames)
+	{
+		if (RefSkeleton.FindBoneIndex(FName(*BoneName)) == INDEX_NONE)
+		{
+			Out.Error = FString::Printf(
+				TEXT("Bone '%s' does not exist on schema skeleton '%s'"),
+				*BoneName, *ValidationSkeleton->Skeleton->GetPathName());
+			return Out;
+		}
+	}
+
+	FArrayProperty* ChannelsProp = CastField<FArrayProperty>(
+		UPoseSearchSchema::StaticClass()->FindPropertyByName(TEXT("Channels")));
+	if (!ChannelsProp)
+	{
+		Out.Error = TEXT("UPoseSearchSchema.Channels property was not found");
+		return Out;
+	}
+
+	FScriptArrayHelper Channels(ChannelsProp, ChannelsProp->ContainerPtrToValuePtr<void>(PSS));
+	UPoseSearchFeatureChannel_FilterCrashingLegs* ExistingChannel = nullptr;
+	int32 ExistingCount = 0;
+	for (int32 Index = 0; Index < Channels.Num(); ++Index)
+	{
+		UPoseSearchFeatureChannel* Channel =
+			*reinterpret_cast<UPoseSearchFeatureChannel**>(Channels.GetRawPtr(Index));
+		if (UPoseSearchFeatureChannel_FilterCrashingLegs* CrashingLegs =
+			Cast<UPoseSearchFeatureChannel_FilterCrashingLegs>(Channel))
+		{
+			ExistingChannel = CrashingLegs;
+			Out.ChannelIndex = Index;
+			++ExistingCount;
+		}
+	}
+
+	if (ExistingCount > 1)
+	{
+		Out.Error = FString::Printf(
+			TEXT("Schema contains %d authored Crashing Legs channels; remove duplicates manually before updating"),
+			ExistingCount);
+		return Out;
+	}
+
+	const FName LeftThighName(*LeftThighBone);
+	const FName RightThighName(*RightThighBone);
+	const FName LeftFootName(*LeftFootBone);
+	const FName RightFootName(*RightFootBone);
+	const EInputQueryPose InputQueryPose = bUseContinuingPose
+		? EInputQueryPose::UseContinuingPose
+		: EInputQueryPose::UseCharacterPose;
+
+	const bool bNeedsCreate = ExistingChannel == nullptr;
+	const bool bNeedsUpdate = bNeedsCreate
+		|| ExistingChannel->LeftThigh.BoneName != LeftThighName
+		|| ExistingChannel->RightThigh.BoneName != RightThighName
+		|| ExistingChannel->LeftFoot.BoneName != LeftFootName
+		|| ExistingChannel->RightFoot.BoneName != RightFootName
+		|| !FMath::IsNearlyEqual(ExistingChannel->Weight, Weight)
+		|| !FMath::IsNearlyEqual(ExistingChannel->AllowedTolerance, AllowedTolerance)
+		|| ExistingChannel->InputQueryPose != InputQueryPose;
+
+	if (!bNeedsUpdate)
+	{
+		Out.bSuccess = true;
+		return Out;
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT(
+		"SetPoseSearchCrashingLegsChannel", "Set Pose Search Crashing Legs Channel"));
+	PSS->Modify();
+
+	UPoseSearchFeatureChannel_FilterCrashingLegs* Channel = ExistingChannel;
+	if (!Channel)
+	{
+		Channel = NewObject<UPoseSearchFeatureChannel_FilterCrashingLegs>(
+			PSS, NAME_None, RF_Transactional);
+		Out.ChannelIndex = Channels.Num();
+		PSS->AddChannel(Channel);
+		Out.bCreated = true;
+	}
+	else
+	{
+		Channel->Modify();
+	}
+
+	Channel->LeftThigh.BoneName = LeftThighName;
+	Channel->RightThigh.BoneName = RightThighName;
+	Channel->LeftFoot.BoneName = LeftFootName;
+	Channel->RightFoot.BoneName = RightFootName;
+	Channel->Weight = Weight;
+	Channel->AllowedTolerance = AllowedTolerance;
+	Channel->InputQueryPose = InputQueryPose;
+
+	PSS->PostEditChange();
+	PSS->MarkPackageDirty();
+
+	Out.bSuccess = true;
+	Out.bChanged = true;
+	return Out;
+}
+
 // ─── PSD info ──────────────────────────────────────────────
 
 FBridgePSDInfo UUnrealBridgePoseSearchLibrary::GetDatabaseInfo(const FString& DatabasePath)
@@ -267,11 +426,18 @@ FBridgePSDInfo UUnrealBridgePoseSearchLibrary::GetDatabaseInfo(const FString& Da
 	Out.Tags = PSD->Tags;
 
 #if WITH_EDITOR
-	Out.IndexStatus = IndexStatusToString(ProbeIndexState(PSD));
-	const UE::PoseSearch::FSearchIndex& Idx = PSD->GetSearchIndex();
-	Out.IndexedPoseCount = Idx.GetNumPoses();
-	// Approximate memory: feature-vector data is the dominant cost. PoseMetadata is small per-pose.
-	Out.IndexedMemoryBytes = static_cast<int64>(Idx.Values.GetAllocatedSize() + Idx.PoseMetadata.GetAllocatedSize());
+	const UE::PoseSearch::EAsyncBuildIndexResult IndexState = ProbeIndexState(PSD);
+	Out.IndexStatus = IndexStatusToString(IndexState);
+	// GetSearchIndex() asserts while the async index is empty or still has the
+	// previous schema cardinality. Only inspect it after the manager reports a
+	// successful, current index.
+	if (IndexState == UE::PoseSearch::EAsyncBuildIndexResult::Success)
+	{
+		const UE::PoseSearch::FSearchIndex& Idx = PSD->GetSearchIndex();
+		Out.IndexedPoseCount = Idx.GetNumPoses();
+		// Approximate memory: feature-vector data is the dominant cost. PoseMetadata is small per-pose.
+		Out.IndexedMemoryBytes = static_cast<int64>(Idx.Values.GetAllocatedSize() + Idx.PoseMetadata.GetAllocatedSize());
+	}
 #endif
 
 	return Out;

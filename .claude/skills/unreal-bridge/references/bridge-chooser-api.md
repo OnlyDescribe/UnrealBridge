@@ -150,6 +150,12 @@ col = unreal.UnrealBridgeChooserLibrary.add_chooser_column_enum(
 
 ### `remove_chooser_column(chooser_table_path, column_index) → bool`
 
+### `move_chooser_column(chooser_table_path, source_index, target_index) → int`
+
+Move an existing column without rebuilding its cells. `target_index` is an insertion
+index; pass `-1` to move the column to the end. Returns the resulting column index,
+or `-1` on failure.
+
 ### `set_chooser_column_disabled(chooser_table_path, column_index, disabled) → bool`
 
 ### `set_chooser_cell_raw(chooser_table_path, column_index, row_index, t3d_value) → bool`

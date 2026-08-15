@@ -177,6 +177,12 @@ bool UUnrealBridgeChooserLibrary::RemoveChooserColumn(const FString& ChooserTabl
 	return bool{};
 }
 
+int32 UUnrealBridgeChooserLibrary::MoveChooserColumn(const FString& ChooserTablePath, int32 SourceIndex, int32 TargetIndex)
+{
+	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeChooserLibrary::MoveChooserColumn requires UE 5.7+ — call ignored on this engine version"));
+	return int32{};
+}
+
 bool UUnrealBridgeChooserLibrary::SetChooserColumnDisabled(const FString& ChooserTablePath, int32 ColumnIndex, bool bDisabled)
 {
 	UE_LOG(LogTemp, Warning, TEXT("UUnrealBridgeChooserLibrary::SetChooserColumnDisabled requires UE 5.7+ — call ignored on this engine version"));

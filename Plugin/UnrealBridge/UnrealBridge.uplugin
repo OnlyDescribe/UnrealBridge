@@ -39,12 +39,58 @@
 			"Enabled": true
 		},
 		{
+			"Name": "MotionWarping",
+			"Enabled": true
+		},
+		{
 			"Name": "GeometryScripting",
 			"Enabled": true
 		},
 		{
 			"Name": "PCG",
 			"Enabled": true
+		},
+		{
+			"Name": "StateTree",
+			"Enabled": true
+		},
+		{
+			"Name": "GameplayStateTree",
+			"Enabled": true
+		},
+		{
+			"Name": "StructUtils",
+			"Enabled": true
+		},
+		{
+			"Name": "SmartObjects",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "WorldConditions",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "ModelViewViewModel",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "ControlRig",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "IKRig",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true,
+			"Optional": true
 		}
 	]
 }

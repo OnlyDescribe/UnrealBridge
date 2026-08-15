@@ -35,6 +35,10 @@ PRIVATE = REPO_ROOT / "Plugin" / "UnrealBridge" / "Source" / "UnrealBridge" / "P
 # the supplied list — used when a library has a handful of 5.7-gated funcs
 # alongside many version-stable ones).
 TARGETS: list[dict] = [
+    {"name": "UnrealBridgeNiagaraLibrary",       "scope": "all"},
+    {"name": "UnrealBridgeRigLibrary",            "scope": "all"},
+    {"name": "UnrealBridgeStateTreeLibrary",      "scope": "all"},
+    {"name": "UnrealBridgeSmartObjectLibrary",    "scope": "all"},
     {"name": "UnrealBridgeChooserLibrary",        "scope": "all"},
     {"name": "UnrealBridgePoseSearchLibrary",     "scope": "all"},
     {"name": "UnrealBridgeMaterialLibrary",       "scope": "all"},
@@ -145,7 +149,17 @@ def render_stub(class_name: str, func: dict) -> str:
         f'\tUE_LOG(LogTemp, Warning, '
         f'TEXT("{class_name}::{name} requires UE 5.7+ — call ignored on this engine version"));\n'
     )
-    return f"{rt} {class_name}::{name}({params})\n{{\n{log}{stub_body(rt)}}}\n\n"
+    if class_name == "UUnrealBridgeStateTreeLibrary" and name == "GetLastStateTreeError":
+        body = '\treturn TEXT("StateTree authoring API requires Unreal Engine 5.7+");\n'
+    elif class_name == "UUnrealBridgeSmartObjectLibrary" and name == "GetLastSmartObjectError":
+        body = '\treturn TEXT("Smart Object API requires Unreal Engine 5.7+");\n'
+    elif class_name == "UUnrealBridgeRigLibrary" and name == "GetLastRigError":
+        body = '\treturn TEXT("Control Rig / IK Rig authoring API requires Unreal Engine 5.7+");\n'
+    elif class_name == "UUnrealBridgeNiagaraLibrary" and name == "GetLastNiagaraError":
+        body = '\treturn TEXT("Niagara authoring API requires Unreal Engine 5.7+");\n'
+    else:
+        body = stub_body(rt)
+    return f"{rt} {class_name}::{name}({params})\n{{\n{log}{body}}}\n\n"
 
 
 def render_file(header_stem: str, class_name: str, funcs: list[dict]) -> str:

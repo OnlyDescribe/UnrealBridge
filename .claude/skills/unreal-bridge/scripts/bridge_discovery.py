@@ -1,10 +1,11 @@
-"""UDP-multicast discovery for UnrealBridge.
+"""UDP discovery for UnrealBridge.
 
-Replaces the old "assume 127.0.0.1:9876" wiring: the client sends a single
-probe to the multicast group 239.255.42.99:9876, every running editor on
-the same host or subnet that has the UnrealBridge plugin loaded answers
-with its project name + TCP bind + TCP port. The client picks one (single
-match → auto, multiple → by --project filter or error).
+Replaces the old "assume 127.0.0.1:9876" wiring: the client sends the same
+probe to the multicast group 239.255.42.99:9876 and to the local loopback
+responder. Editors on the same host or subnet that have the UnrealBridge
+plugin loaded answer with their project name + TCP bind + TCP port. The
+client de-duplicates responses by process id, then picks one (single match
+→ auto, multiple → by --project filter or error).
 
 Wire format:
 
@@ -40,6 +41,7 @@ from typing import Iterable, List, Optional, Tuple
 DEFAULT_DISCOVERY_GROUP = "239.255.42.99"
 DEFAULT_DISCOVERY_PORT = 9876
 DEFAULT_DISCOVERY_TIMEOUT_MS = 800
+LOCAL_DISCOVERY_HOST = "127.0.0.1"
 
 
 @dataclass
@@ -81,10 +83,11 @@ def discover(project_filter: str = "*",
              group: str = DEFAULT_DISCOVERY_GROUP,
              group_port: int = DEFAULT_DISCOVERY_PORT,
              timeout_ms: int = DEFAULT_DISCOVERY_TIMEOUT_MS) -> List[Endpoint]:
-    """Broadcast a probe to the discovery group; collect every response.
+    """Probe the multicast group and local loopback; collect every response.
 
     Returns a list of Endpoint objects — empty if no editors responded.
-    Never raises on "not found"; only on socket-level failures.
+    A failure on one send path does not suppress the other path. Never raises
+    on "not found"; only when every probe send fails at the socket level.
     """
     request_id = str(uuid.uuid4())
     probe_payload = json.dumps({
@@ -101,7 +104,25 @@ def discover(project_filter: str = "*",
         # Bind ephemeral — responses arrive as unicast to this port.
         sock.bind(("0.0.0.0", 0))
 
-        sock.sendto(probe_payload, (group, group_port))
+        # Windows multicast loopback can be silently dropped by VPNs, virtual
+        # NICs, or Public firewall policy even while LAN multicast remains
+        # useful. Send the identical request from the same ephemeral socket to
+        # loopback as a local-only fallback. Both responders reply to this
+        # socket and the collection loop de-duplicates them by editor PID.
+        probe_targets = [(group, group_port)]
+        loopback_target = (LOCAL_DISCOVERY_HOST, group_port)
+        if loopback_target not in probe_targets:
+            probe_targets.append(loopback_target)
+
+        send_errors: List[OSError] = []
+        for target in probe_targets:
+            try:
+                sock.sendto(probe_payload, target)
+            except OSError as error:
+                send_errors.append(error)
+
+        if len(send_errors) == len(probe_targets):
+            raise send_errors[-1]
 
         deadline = time.monotonic() + (timeout_ms / 1000.0)
         results: List[Endpoint] = []
@@ -157,13 +178,13 @@ def select(endpoints: List[Endpoint],
     """
     if not endpoints:
         raise DiscoveryError(
-            "no UnrealBridge editors found on the LAN (multicast probe timed out). "
+            "no UnrealBridge editors found (multicast and local probes timed out). "
             "Check — in this order:\n"
             "  1. UE editor is running (and loaded past the splash screen).\n"
             "  2. The UnrealBridge plugin is installed in that project's "
             "Plugins/ folder AND enabled in the .uproject.\n"
-            "  3. Multicast isn't being dropped by a VPN / virtual NIC — if "
-            "everything else is fine, pass --endpoint=127.0.0.1:<port>, "
+            "  3. UDP discovery isn't being blocked locally — if everything "
+            "else is fine, pass --endpoint=127.0.0.1:<port>, "
             "reading <port> from the editor log line "
             "`LogUnrealBridge: Listening on 127.0.0.1:<port>`."
         )
@@ -267,7 +288,7 @@ def _cli():
     """Small command-line driver: `python bridge_discovery.py` to list editors."""
     import argparse
     parser = argparse.ArgumentParser(
-        description="List every UnrealBridge editor reachable via multicast discovery.")
+        description="List every UnrealBridge editor reachable via UDP discovery.")
     parser.add_argument("--project", default="*",
                         help="Filter by project name/path (default: all)")
     parser.add_argument("--group", default=DEFAULT_DISCOVERY_GROUP,

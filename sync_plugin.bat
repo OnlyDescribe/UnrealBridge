@@ -1,22 +1,8 @@
 @echo off
 setlocal
 
-set "SRC=%~dp0Plugin\UnrealBridge"
-set "DST=D:\Path\To\YourProject\Plugins\UnrealBridge"
+rem Legacy command-name alias. It accepts the same project-root argument as
+rem sync_project.bat and deploys both the plugin and matching skills.
 
-echo Syncing UnrealBridge plugin...
-echo   From: %SRC%
-echo   To:   %DST%
-echo.
-
-robocopy "%SRC%" "%DST%" /MIR /XD Binaries Intermediate /XF *.pdb 2>nul
-
-if %ERRORLEVEL% LEQ 7 (
-    echo.
-    echo Done.
-) else (
-    echo.
-    echo ERROR: robocopy failed with code %ERRORLEVEL%
-)
-
-endlocal
+call "%~dp0sync_project.bat" %*
+endlocal & exit /b %ERRORLEVEL%

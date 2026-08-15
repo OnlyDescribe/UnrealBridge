@@ -601,9 +601,64 @@ Remove every notify whose name matches (exact `FName` compare). Returns count re
 n = unreal.UnrealBridgeAnimLibrary.remove_anim_notifies_by_name('/Game/Anim/Attack', 'HitFrame')
 ```
 
+### add_anim_notify_state(animation_path, notify_state_class_path, notify_track_name, start_time, end_time) -> bool
+
+Add a class-backed `UAnimNotifyState` to any `UAnimSequenceBase` (sequence or
+montage). The named track is created when missing. The class path must resolve
+to a loaded `UAnimNotifyState` subclass.
+
+```python
+ok = unreal.UnrealBridgeAnimLibrary.add_anim_notify_state(
+    '/Game/Anim/DoorOpen',
+    '/Script/MyGame.ANS_InterruptWindow',
+    'Interrupt',
+    0.0,
+    0.35)
+unreal.EditorAssetLibrary.save_asset('/Game/Anim/DoorOpen')
+```
+
+### remove_anim_notify_states_by_class(animation_path, notify_state_class_path) -> int
+
+Remove every state notify whose concrete class exactly matches the supplied
+class path. This is the idempotent cleanup step before batch re-authoring a
+pair of windows.
+
+```python
+removed = unreal.UnrealBridgeAnimLibrary.remove_anim_notify_states_by_class(
+    '/Game/Anim/DoorOpen',
+    '/Script/MyGame.ANS_InterruptWindow')
+```
+
+### get_motion_warping_notifies(animation_path) -> list[FBridgeMotionWarpingNotifyInfo]
+
+Return authored `UAnimNotifyState_MotionWarping` windows, including
+`warp_target_name`, `start_time`, `end_time`, and `modifier_class`.
+
+### set_motion_warping_notify(animation_path, warp_target_name, start_time, end_time) -> bool
+
+Author exactly one `Skew Warp` Motion Warping NotifyState for the requested target.
+Existing Motion Warping windows for other targets are preserved; existing windows
+for the same target are replaced. The animation package is marked dirty but must
+still be saved by the caller.
+
+```python
+ok = unreal.UnrealBridgeAnimLibrary.set_motion_warping_notify(
+    '/Game/Anim/DoorOpen', 'DoorInteract', 0.0001, 1.85)
+windows = unreal.UnrealBridgeAnimLibrary.get_motion_warping_notifies(
+    '/Game/Anim/DoorOpen')
+unreal.EditorAssetLibrary.save_asset('/Game/Anim/DoorOpen')
+```
+
 ### set_anim_sequence_rate_scale(sequence_path, rate_scale) -> bool
 
 Set `RateScale` on an `UAnimSequence`. Accepts negative values (reversed playback).
+
+### copy_and_apply_animation_modifiers(source_sequence_path, target_sequence_paths) -> int
+
+Copy the editable Animation Modifier stack from one `AnimSequence` to every target,
+then apply each modifier. Existing target modifiers of the same class are updated;
+unrelated modifiers remain intact. Returns the number of modifier instances applied.
+Target packages are marked dirty and must still be saved by the caller.
 
 ### add_montage_section(montage_path, section_name, start_time) -> bool
 
@@ -946,6 +1001,7 @@ apply_additive = lib.add_anim_graph_node_by_class_name(ABP, 'AnimGraph', 'AnimGr
 | `disconnect_anim_graph_pin(abp, graph_name, node_guid, pin_name)` → bool | Breaks every link on one pin. |
 | `remove_anim_graph_node(abp, graph_name, node_guid)` → bool | Removes the node and breaks all its links. |
 | `set_anim_graph_node_position(abp, graph_name, node_guid, x, y)` → bool | Updates `NodePosX` / `NodePosY`. |
+| `ensure_pose_history_collected_bones(abp, graph_name, node_guid, bone_names)` → bool | Appends only missing bones to an existing Pose Search History Collector. Preserves existing entries and node layout; validates every bone against the ABP skeleton. |
 | `set_anim_sequence_player_sequence(abp, graph_name, node_guid, sequence_path)` → bool | Swap the bound sequence on an existing SequencePlayer. Empty path clears it. |
 | `set_anim_slot_name(abp, graph_name, node_guid, slot_name)` → bool | Change a Slot node's `SlotName`; slot auto-registered on the skeleton if missing. |
 

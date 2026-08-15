@@ -269,6 +269,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Chooser")
 	static bool RemoveChooserColumn(const FString& ChooserTablePath, int32 ColumnIndex);
 
+	/** Move a column without rebuilding it. TargetIndex is an insertion index; pass -1 to move it last. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Chooser")
+	static int32 MoveChooserColumn(const FString& ChooserTablePath, int32 SourceIndex, int32 TargetIndex);
+
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Chooser")
 	static bool SetChooserColumnDisabled(const FString& ChooserTablePath, int32 ColumnIndex, bool bDisabled);
 

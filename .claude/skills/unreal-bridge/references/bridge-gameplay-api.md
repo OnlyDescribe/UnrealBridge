@@ -627,6 +627,20 @@ FName of the first PIE player pawn. Empty outside PIE / no pawn.
 Use this when passing the player pawn to a Level / Gameplay API that
 takes an actor name.
 
+### get_player_skeletal_mesh_component(component_name="") -> SkeletalMeshComponent or None
+
+Returns a skeletal mesh component owned by the PIE player pawn. With an
+empty name it prefers `ACharacter::GetMesh()` and otherwise returns the
+first skeletal mesh component. A non-empty name matches the component's
+object name case-insensitively. Useful for targeted bone/socket telemetry;
+it does not enumerate world actors.
+
+### get_player_anim_instance(component_name="") -> AnimInstance or None
+
+Returns the current AnimInstance of `get_player_skeletal_mesh_component`.
+This is a read-only observation seam for runtime animation debugging. Use
+`get_editor_property` for reflected fields and keep periodic sampling light.
+
 ### get_player_start_actor_name() -> str
 
 FName of the first `APlayerStart` actor. Matches by class-name

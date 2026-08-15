@@ -130,13 +130,15 @@ Frame the viewport on the currently selected actor(s).
 
 Queue a high-res screenshot of the active level viewport. `resolution_multiplier` scales viewport size (1.0 = native). Output is written to `<Project>/Saved/Screenshots/WindowsEditor/` (engine-named). Returns True if the request was queued.
 
-Asynchronous — the file appears 1–2 frames later. Use `capture_active_viewport` when you need the bytes in-process.
+Asynchronous — the file appears 1–2 frames later. Use `capture_active_viewport_as_displayed` when you need synchronous bytes that match the visible viewport, or `capture_active_viewport` for raw scene pixels.
 
 ```python
 unreal.UnrealBridgeEditorLibrary.take_high_res_screenshot(2.0)  # 2x native
 ```
 
 ### capture_active_viewport(out_file_path, include_base64) -> FBridgeScreenshotResult
+
+This is the raw `FViewport` readback API. It is useful for a clean scene image, but Slate-composited overlays can be absent. When the requirement is **"capture exactly what the user sees"** (debug drawing, stats, selection outlines, editor gizmos, or PIE HUD/UMG), use `capture_active_viewport_as_displayed` instead.
 
 **Synchronous** viewport capture → PNG on disk and/or base64. Picks the PIE game viewport when PIE is running, otherwise the active level editor viewport. Runs a `Draw()` + `ReadPixels` round-trip on the game thread.
 
@@ -164,19 +166,21 @@ print(r.success, r.source, r.width, r.height, r.file_path)
 
 Tip: when the caller is Claude Code wanting to "see" the viewport, pass a disk path and then `Read` the PNG — cheaper and more reliable than round-tripping the bytes through base64.
 
-### capture_game_viewport_with_ui(out_file_path, include_base64) -> FBridgeScreenshotResult
+### capture_active_viewport_as_displayed(out_file_path, include_base64) -> FBridgeScreenshotResult
 
-Synchronous PIE/game viewport capture through the viewport's Slate widget. Unlike `capture_active_viewport`, this captures the composed game viewport area after UMG/Slate has been painted, so it is the runtime UI evidence path.
+**Synchronous WYSIWYG viewport capture** to PNG on disk and/or base64. Picks the PIE viewport while PIE is running, otherwise the active level editor viewport. On Windows it reads the pixels already presented by the native editor window and crops them to the cached `SViewport` screen rectangle, preserving one-frame debug primitives that a redraw would consume. Other platforms fall back to final Slate-composited capture.
 
-Returns `success=False` when there is no active game viewport widget. The result `source` is `"PIESlate"`.
+Use this interface whenever the screenshot must match the visible viewport. It includes scene debug drawing, viewport stats, selection outlines, editor gizmos, and PIE HUD/UMG visible inside that viewport. It intentionally does not include the OS mouse cursor or separate popup/tool-tip windows outside the viewport rectangle.
+
+Parameters and result fields are identical to `capture_active_viewport`.
 
 ```python
-r = unreal.UnrealBridgeEditorLibrary.capture_game_viewport_with_ui(
-    '<absolute-path>/pie-with-ui.png', False)
-print(r.success, r.source, r.width, r.height, r.error)
+r = unreal.UnrealBridgeEditorLibrary.capture_active_viewport_as_displayed(
+    '<absolute-path>/viewport-as-displayed.png', False)
+print(r.success, r.source, r.width, r.height, r.file_path, r.error)
 ```
 
-Use `capture_active_viewport` for scene/backbuffer inspection and `capture_game_viewport_with_ui` for HUD validation. Restart KeyEditor and regenerate the bridge manifest/client after adding this reflected API.
+Prefer this method for visual diagnosis and acceptance screenshots. Keep using `capture_active_viewport` when editor overlays would interfere with image analysis.
 
 ### capture_viewport_channel(channel, out_file_path, width, height, max_depth_clamp, include_base64) -> FBridgeChannelCaptureResult
 
@@ -194,7 +198,7 @@ Channels explained:
 
 | Channel | Output | Notes |
 |---------|--------|-------|
-| `SceneColor` | 8-bit RGB PNG | Final LDR, post-processed. For a perfect viewport match use `capture_active_viewport` — this path uses SceneCapture defaults which diverge from editor viewport post-process. |
+| `SceneColor` | 8-bit RGB PNG | Final LDR, post-processed. For a perfect visible-viewport match use `capture_active_viewport_as_displayed` — this path uses SceneCapture defaults which diverge from editor viewport post-process. |
 | `SceneColorHDR` | 8-bit RGB PNG (quantized) | Pre-tonemap HDR, tonemapped via `FLinearColor::ToFColor(true)`. For genuine HDR export, add an `.exr` extension handler (TODO). |
 | `Depth` | 16-bit grayscale PNG | Linear world-space depth in cm. Pixel value in PNG = `((world_depth - DepthMin) / (DepthMax - DepthMin)) * 65535` — reconstruct via the `depth_min` / `depth_max` fields. Sky = fp16 ∞ (~65504), use `max_depth_clamp` to avoid squashing the foreground. |
 | `DeviceDepth` | 16-bit grayscale PNG | Non-linear device Z in `[0, 1]`. Preserves perspective distribution. Good for LOD / occlusion reasoning without needing projection matrices. |
@@ -935,7 +939,9 @@ therefore the current docked viewport size and may be too small for UI evidence.
 Starts in-process PIE in a dedicated Slate window at the requested pixel size.
 The function uses a transient copy of `ULevelEditorPlaySettings`, so it does not
 change the user's persistent Editor Preferences. Use this before
-`capture_game_viewport_with_ui` for repeatable UI validation.
+`capture_active_viewport_as_displayed` for repeatable UI validation. The legacy
+`capture_game_viewport_with_ui` name is retained as a PIE-only compatibility
+alias and delegates to that official implementation.
 
 ```python
 unreal.UnrealBridgeEditorLibrary.start_pie_in_new_window(1280, 720)
@@ -1265,7 +1271,7 @@ JSON shape:
           ] } ] } ] }
 ```
 
-**What's covered.** Every BlueprintCallable UFUNCTION whose owning class lives in the `/Script/UnrealBridge` package — i.e. all `UUnrealBridge*Library` classes. Current count: ~688 UFUNCTIONs across 13 libraries.
+**What's covered.** Every BlueprintCallable UFUNCTION whose owning class lives in the `/Script/UnrealBridge` package — i.e. all `UUnrealBridge*Library` classes. Current count: 1384 reflected UFUNCTIONs across 26 libraries (the Python-callable manifest currently exposes 1382 methods).
 
 **What's not covered (yet).**
 - USTRUCT field layouts (return / param types include the struct name, but not its UPROPERTY list).

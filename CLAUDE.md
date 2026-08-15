@@ -11,11 +11,11 @@ UnrealBridge is a TCP bridge between external tools (Claude Code) and Unreal Eng
 
 ## Key Commands
 
-**Sync plugin to UE project and compile:**
+**Sync plugin and matching skills to a UE project:**
 ```bash
-sync_plugin.bat
+sync_project.bat D:\Path\To\YourProject
 ```
-Mirrors `Plugin/UnrealBridge/` into the target project's `Plugins/UnrealBridge/` (excluding `Binaries`/`Intermediate`). The DST path lives in `sync_plugin.bat` itself — do not hardcode it anywhere else.
+Mirrors `Plugin/UnrealBridge/` plus `.claude/skills/unreal-bridge/` into the target project's plugin, `.agents`, and `.claude` destinations. Local plugin build outputs are retained. `sync_plugin.bat` is a legacy command-name alias with the same project-root argument.
 
 **Test bridge connection:**
 ```bash
@@ -41,10 +41,10 @@ Length-prefixed JSON over TCP on an OS-assigned port (default bind `127.0.0.1`, 
   - `{"id":"...", "command":"debug_resume"}` → unsticks a paused BP breakpoint via `FKismetDebugUtilities::RequestAbortingExecution`
 
 ### Discovery Protocol
-UDP multicast on `239.255.42.99:9876` (the one constant the whole system shares). Multiple editors can bind via `SO_REUSEADDR`.
+UDP discovery uses LAN multicast on `239.255.42.99:9876` plus a parallel local-loopback probe to `127.0.0.1:9876`. Both carry the same request id and responses are de-duplicated by editor PID. This preserves LAN discovery while avoiding dependence on Windows multicast loopback. Multiple editors can bind via `SO_REUSEADDR`.
 - Probe (client → group): `{"v":1, "type":"probe", "request_id":"<uuid>", "filter":{"project":"<name|path|*>"}}`
 - Response (server → probe source, unicast): `{"v":1, "type":"response", "request_id":"<uuid>", "pid":..., "project":"...", "project_path":"...", "engine_version":"...", "tcp_bind":"...", "tcp_port":..., "token_fingerprint":"<sha1(token)[:16]>"}`
-- Client loop: probe → collect for `--discovery-timeout` ms (default 800) → filter by `--project=...` → connect TCP. Empty `token_fingerprint` means no token required.
+- Client loop: send the same probe to multicast + loopback → collect for `--discovery-timeout` ms (default 800) → de-duplicate by PID → filter by `--project=...` → connect TCP. Empty `token_fingerprint` means no token required.
 
 ### Server configuration (CLI / env / editor ini)
 Priority CLI > env > `EditorPerProjectUserSettings.ini [UnrealBridge]` > default.
@@ -62,14 +62,17 @@ Priority CLI > env > `EditorPerProjectUserSettings.ini [UnrealBridge]` > default
 - **UnrealBridgeModule** — Module entry point at PostEngineInit. Parses config, starts TCP server + discovery responder, maps `/Plugin/UnrealBridge/` → Shaders dir
 - **UnrealBridgeServer** — TCP listener, accepts clients on background threads, dispatches Python execution to GameThread via `IPythonScriptPlugin::ExecPythonCommandEx`. Uses `__UB_ERR__` sentinel to separate stdout from stderr in captured output
 - **UnrealBridgeBlueprintLibrary** — Blueprint introspection: class hierarchy, variables, functions, components, interfaces, graph analysis (call graph, execution flow, node inspection, pin connections), timelines, event dispatchers, cross-graph search, write ops (set variable defaults, component properties, add variables)
-- **UnrealBridgeAssetLibrary** — Asset search (keyword with include/exclude tokens), derived class queries, asset references/dependencies, DataAsset queries, folder listing
+- **UnrealBridgeAssetLibrary** — Asset search (keyword with include/exclude tokens), derived class queries, asset references/dependencies, DataAsset queries, folder listing, and transactional StaticMesh/SkeletalMesh default-material authoring (index, slot name, atomic batch, optional save)
 - **UnrealBridgeAnimLibrary** — AnimBlueprint introspection: state machines, AnimGraph nodes, linked layers, slots, curves, anim sequence/montage/blend space info, skeleton bone tree
+- **UnrealBridgeRigLibrary** — UE 5.7+ Control Rig hierarchy/RigVM authoring and transient evaluation; IK Rig solver/goal/chain setup; IK Retargeter ops, mappings, poses, profiles, processor validation and batch retargeting; sampled animation-quality diagnostics. UE 5.3-5.6 expose safe logged stubs
+- **UnrealBridgeNiagaraLibrary** — UE 5.7+ Niagara/VFX authoring and delivery: System/Emitter lifecycle and recipes, stack modules and inputs, user parameters, renderers/materials/bindings, compiler diagnostics and audits, weapon Trail/Beam, Sparks, layered Explosion/shockwave/light and Dissolve presets, plus transient preview simulation/transform/runtime metrics. UE 5.3-5.6 expose safe logged stubs
 - **UnrealBridgeDataTableLibrary** — DataTable row inspection
 - **UnrealBridgeMaterialLibrary** — Material instance parameter queries
 - **UnrealBridgeUMGLibrary** — Widget Blueprint introspection: widget tree, properties, animations, bindings, events, search, property write
 - **UnrealBridgeLevelLibrary** — Level/actor introspection and editing on the editor world: summary, actor listing with class/tag/name filters, actor info/transform/components, class/tag/radius queries, streaming levels, selection; write ops spawn/destroy/move/attach/detach/duplicate/label/hide + nested property get/set (e.g. `RootComponent.RelativeLocation`). All writes wrapped in `FScopedTransaction` for Ctrl+Z
 - **UnrealBridgeEditorLibrary** — Editor session control: state query (engine version, PIE status, opened assets, CB selection/path, viewport camera), asset open/close/save/reload, Content Browser sync, viewport camera set/focus, PIE start/stop/pause, undo/redo, console command execution, CVar get/set/list, redirector fixup, Blueprint compile
 - **UnrealBridgeGameplayAbilityLibrary** — GameplayAbilitySystem introspection (scaffold): GameplayAbility Blueprint CDO metadata — name, parent, instancing/net policy, asset tags, cost/cooldown GE class. Depends on the `GameplayAbilities` engine plugin (auto-enabled via `.uplugin`)
+- **UnrealBridgeStateTreeLibrary** — UE 5.7+ StateTree asset lifecycle and full authoring: schema-filtered state/node/transition CRUD, generic node/state/transition properties, property bindings, root/state parameters, compiler diagnostics, transient debugger breakpoints, and live `UStateTreeComponent` inspection/control. Older engines expose safe stubs
 - **UnrealBridgePerfLibrary** — Structured perf snapshots: frame timing (FPS, GT/RT/GPU/RHI ms) from viewport `FStatUnitData`, draw calls / primitives from RHI globals, process memory via `FPlatformMemory::GetStats`, UObject class histogram via `TObjectIterator`. Replaces parsing `stat unit` text output
 
 ### Python Side
@@ -94,7 +97,7 @@ Syncs plugin source then triggers Live Coding via the bridge. Works when the edi
 python .claude/skills/unreal-bridge/scripts/rebuild_relaunch.py
 ```
 
-Quits the editor → runs `sync_plugin.bat` → runs the target project's `Build.bat` → launches the editor detached → polls `bridge.py ping` until ready. Use when adding/removing `UFUNCTION` / `UCLASS` / `UPROPERTY`, changing struct layouts, or recovering from a failed LC compile. Build.bat's stdout captures full compiler output (this is the only way to surface MSVC errors when hot reload reports Failure). Takes ~2–5 minutes.
+Quits the editor → runs the version-locked plugin + skill sync → runs the target project's `Build.bat` → launches the editor detached → polls `bridge.py ping` until ready. Use when adding/removing `UFUNCTION` / `UCLASS` / `UPROPERTY`, changing struct layouts, or recovering from a failed LC compile. Build.bat's stdout captures full compiler output (this is the only way to surface MSVC errors when hot reload reports Failure). Takes ~2–5 minutes.
 
 The script resolves the editor exe from `--editor-exe` CLI arg → `UNREAL_EDITOR_EXE` env var → `UE_ROOT` env var. No hardcoded paths. Set one of those env vars before first use.
 

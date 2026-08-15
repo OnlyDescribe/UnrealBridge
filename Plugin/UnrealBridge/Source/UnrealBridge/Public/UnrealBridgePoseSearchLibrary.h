@@ -92,6 +92,32 @@ struct FBridgePSSInfo
 	TArray<FBridgePSSSkeleton> Skeletons;
 };
 
+/** Result of creating or updating a Pose Search Crashing Legs channel. */
+USTRUCT(BlueprintType)
+struct FBridgePSSCrashingLegsChannelResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|PoseSearch")
+	bool bSuccess = false;
+
+	/** True when a new authored channel was appended; false when an existing one was updated. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|PoseSearch")
+	bool bCreated = false;
+
+	/** False when the authored channel already matched every requested setting. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|PoseSearch")
+	bool bChanged = false;
+
+	/** Zero-based index in the schema's authored top-level Channels array. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|PoseSearch")
+	int32 ChannelIndex = INDEX_NONE;
+
+	/** Human-readable failure reason; empty on success. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|PoseSearch")
+	FString Error;
+};
+
 // ─── Database (PSD) info ───────────────────────────────────
 
 USTRUCT(BlueprintType)
@@ -230,6 +256,24 @@ public:
 	/** List the top-level channels on a PoseSearchSchema (sub-channels not flattened — see SubChannelCount). */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|PoseSearch")
 	static TArray<FBridgePSSChannel> ListSchemaChannels(const FString& SchemaPath);
+
+	/**
+	 * Create or update the schema's authored Crashing Legs channel.
+	 *
+	 * The operation is idempotent: an existing channel is updated instead of
+	 * appending a duplicate. Set AllowedTolerance to zero to disable filtering
+	 * without removing the channel, which is useful for A/B testing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|PoseSearch")
+	static FBridgePSSCrashingLegsChannelResult SetCrashingLegsChannel(
+		const FString& SchemaPath,
+		const FString& LeftThighBone,
+		const FString& RightThighBone,
+		const FString& LeftFootBone,
+		const FString& RightFootBone,
+		float Weight = 0.2f,
+		float AllowedTolerance = 0.3f,
+		bool bUseContinuingPose = true);
 
 	// ── Database (PSD) read ──
 

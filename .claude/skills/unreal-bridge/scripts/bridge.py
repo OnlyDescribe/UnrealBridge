@@ -13,8 +13,9 @@ Usage:
     python bridge.py exec-file script.py           # Multi-step, will iterate / keep on disk
     python bridge.py exec "code" --json            # Machine-readable output
 
-The client auto-discovers the editor via UDP multicast (239.255.42.99:9876)
-— zero config for the common case of one editor running on the local host.
+The client auto-discovers the editor via paired UDP probes: multicast
+(239.255.42.99:9876) for LAN editors plus loopback (127.0.0.1:9876) so local
+discovery does not depend on multicast loopback working.
 
 Every exec / exec-file invocation is recorded as one JSONL line in the project's
 Saved/UnrealBridge/exec.log (ring-buffered, 5 MB × 3 backups = 20 MB hard cap).
@@ -92,7 +93,8 @@ def resolve_target(args) -> "tuple[str, int, str | None, str | None]":
 
     Precedence:
       1. --endpoint=host:port (or UNREAL_BRIDGE_ENDPOINT)
-      2. UDP multicast discovery, filtered by --project (or UNREAL_BRIDGE_PROJECT)
+      2. UDP multicast + local-loopback discovery, filtered by --project
+         (or UNREAL_BRIDGE_PROJECT)
     """
     # 1. Explicit endpoint — no discovery, no project_path.
     endpoint_str = getattr(args, "endpoint", None) or os.environ.get("UNREAL_BRIDGE_ENDPOINT")
@@ -958,8 +960,9 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--discovery-group",
-        help=f"Multicast group host:port "
-             f"(default: {DEFAULT_DISCOVERY_GROUP}:{DEFAULT_DISCOVERY_PORT}).",
+        help=f"LAN multicast group host:port; the local-loopback fallback uses "
+             f"the same port (default: {DEFAULT_DISCOVERY_GROUP}:"
+             f"{DEFAULT_DISCOVERY_PORT}).",
     )
 
 

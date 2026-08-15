@@ -142,6 +142,87 @@ struct FBridgeSkeletalMeshInfo
 	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset") FString PhysicsAssetPath;
 };
 
+/** One declared material slot on a UStaticMesh or USkeletalMesh asset. */
+USTRUCT(BlueprintType)
+struct FBridgeMeshMaterialSlot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	int32 MaterialIndex = INDEX_NONE;
+
+	/** Runtime-facing slot name. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString SlotName;
+
+	/** Importer-facing slot name retained for reimport matching. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString ImportedSlotName;
+
+	/** Bound UMaterialInterface path, or empty when the slot is unassigned. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString MaterialAssetPath;
+};
+
+/** One entry for an atomic SetMeshMaterials call. */
+USTRUCT(BlueprintType)
+struct FBridgeMeshMaterialAssignment
+{
+	GENERATED_BODY()
+
+	/** Zero-based slot index. Leave at -1 to resolve by SlotName instead. */
+	UPROPERTY(BlueprintReadWrite, Category = "UnrealBridge|Asset")
+	int32 MaterialIndex = INDEX_NONE;
+
+	/**
+	 * Runtime-facing slot name. Used when MaterialIndex is -1. When both are
+	 * supplied, the name must match the indexed slot and acts as a guard.
+	 */
+	UPROPERTY(BlueprintReadWrite, Category = "UnrealBridge|Asset")
+	FString SlotName;
+
+	/** UMaterialInterface path. Empty clears the slot. */
+	UPROPERTY(BlueprintReadWrite, Category = "UnrealBridge|Asset")
+	FString MaterialAssetPath;
+};
+
+/** Detailed outcome of a mesh-asset material mutation. */
+USTRUCT(BlueprintType)
+struct FBridgeMeshMaterialEditResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	bool bSuccess = false;
+
+	/** True only when this call wrote the package to disk. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	bool bSaved = false;
+
+	/** Package dirty state after the operation. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	bool bPackageDirty = false;
+
+	/** "StaticMesh" or "SkeletalMesh". */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString MeshType;
+
+	/** Number of slots whose material pointer actually changed. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	int32 ChangedCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	TArray<int32> ChangedIndices;
+
+	/** Complete final slot state, including unchanged slots. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	TArray<FBridgeMeshMaterialSlot> Slots;
+
+	/** Empty on success; otherwise explains why no mutation occurred. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Asset")
+	FString Error;
+};
+
 /** Summary of a UTexture2D asset. */
 USTRUCT(BlueprintType)
 struct FBridgeTextureInfo
@@ -586,6 +667,47 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
 	static FBridgeSkeletalMeshInfo GetSkeletalMeshInfo(const FString& AssetPath);
+
+	/**
+	 * Unified material-slot query for either a UStaticMesh or USkeletalMesh.
+	 * Returns an empty array when MeshAssetPath cannot be loaded as either type.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static TArray<FBridgeMeshMaterialSlot> GetMeshMaterialSlots(const FString& MeshAssetPath);
+
+	/**
+	 * Set one material by zero-based slot index on a UStaticMesh or USkeletalMesh.
+	 * Empty MaterialAssetPath clears the slot. The mutation is transactional.
+	 * Set bSave=false for an undoable, in-memory preview; the package remains dirty.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static FBridgeMeshMaterialEditResult SetMeshMaterial(
+		const FString& MeshAssetPath,
+		int32 MaterialIndex,
+		const FString& MaterialAssetPath,
+		bool bSave = true);
+
+	/**
+	 * Set one material by runtime-facing slot name. Fails when the name is absent
+	 * or duplicated instead of silently choosing an arbitrary slot.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static FBridgeMeshMaterialEditResult SetMeshMaterialBySlotName(
+		const FString& MeshAssetPath,
+		const FString& SlotName,
+		const FString& MaterialAssetPath,
+		bool bSave = true);
+
+	/**
+	 * Atomically set multiple material slots in one transaction and one editor
+	 * refresh. Every index/name/material is validated before the mesh is touched.
+	 * Duplicate target slots are rejected. Empty material paths clear their slots.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Asset")
+	static FBridgeMeshMaterialEditResult SetMeshMaterials(
+		const FString& MeshAssetPath,
+		const TArray<FBridgeMeshMaterialAssignment>& Assignments,
+		bool bSave = true);
 
 	/**
 	 * Dimensions, pixel format, compression settings, LOD group, sRGB flag,

@@ -15,6 +15,7 @@ public class UnrealBridge : ModuleRules
 		{
 			"CoreUObject",
 			"Engine",
+			"ApplicationCore",
 			"Sockets",
 			"Networking",
 			"Json",
@@ -32,7 +33,11 @@ public class UnrealBridge : ModuleRules
 			"UnrealEd",
 			"EditorSubsystem",
 			"MovieScene",
+			"MovieSceneTracks",
 			"AnimGraphRuntime",
+			"AnimationCore",
+			"AnimationBlueprintLibrary",
+			"AnimationModifiers",
 			"ContentBrowser",
 			"ContentBrowserData",
 			"LevelEditor",
@@ -63,6 +68,12 @@ public class UnrealBridge : ModuleRules
 			"Chooser",
 			"ChooserEditor",
 			"StructUtils",
+			"PropertyBindingUtils",
+			"StateTreeModule",
+			"StateTreeEditorModule",
+			"GameplayStateTreeModule",
+			"AssetTools",
+			"MotionWarping",
 			// Geometry Script — Lane 2 of the procedural-content roadmap
 			// (UnrealBridgeGeometryLibrary). UDynamicMesh + the runtime BP
 			// function libs (CopyMeshFromStaticMesh, ApplyMeshBoolean, etc.)
@@ -94,6 +105,39 @@ public class UnrealBridge : ModuleRules
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PrivateDependencyModuleNames.Add("LiveCoding");
+		}
+
+		// SmartObjects first ships in the supported engine matrix after 5.3,
+		// while UnrealBridge's authoring/runtime API intentionally targets the
+		// stable UE 5.7 surface. Older engines compile the generated safe stubs.
+		if (Target.Version.MajorVersion > 5
+			|| (Target.Version.MajorVersion == 5 && Target.Version.MinorVersion >= 7))
+		{
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				// Niagara authoring and compile diagnostics. The public API is kept
+				// build-safe on older engines through generated reflected stubs.
+				"Niagara",
+				"NiagaraCore",
+				"NiagaraEditor",
+				"NiagaraShader",
+				// Rig authoring. The editor-facing controllers are intentionally
+				// version-gated because their data models changed substantially in 5.6.
+				"ControlRig",
+				"ControlRigDeveloper",
+				"ControlRigEditor",
+				"RigVM",
+				"RigVMDeveloper",
+				"RigVMEditor",
+				"IKRig",
+				"IKRigEditor",
+				"SmartObjectsModule",
+				"SmartObjectsEditorModule",
+				"WorldConditions",
+				"FieldNotification",
+				"ModelViewViewModel",
+				"ModelViewViewModelBlueprint",
+			});
 		}
 	}
 }
