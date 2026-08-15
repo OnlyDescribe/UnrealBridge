@@ -214,6 +214,101 @@ struct FBridgeInputActionState
 	bool bHasState = false;
 };
 
+/** Mouse buttons supported by the focus-independent PIE gameplay input path. */
+UENUM(BlueprintType)
+enum class EBridgePIEMouseButton : uint8
+{
+	Left,
+	Right,
+	Middle,
+};
+
+/** Structured result returned by every PIE mouse mutation. */
+USTRUCT(BlueprintType)
+struct FBridgePIEMouseInputResult
+{
+	GENERATED_BODY()
+
+	/** True when the request was accepted by the gameplay input path. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bSuccess = false;
+
+	/** Raw return from UGameViewportClient::InputKey/InputAxis. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bHandled = false;
+
+	/** Stable operation label: move / button_press / button_release / click / wheel / release_all. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString Operation;
+
+	/** Stable machine-readable status such as ok, no_pie, or viewport_input_ignored. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString DiagnosticCode;
+
+	/** Human-readable detail for logs and CLI output. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString Message;
+
+	/** Buttons currently owned (held) by UnrealBridge after this operation. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> PressedButtons;
+
+	/** GFrameCounter value at which the request was dispatched. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	int64 DispatchFrame = 0;
+};
+
+/** Read-only diagnostic snapshot for the PIE gameplay mouse input route. */
+USTRUCT(BlueprintType)
+struct FBridgePIEMouseInputState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bPIEActive = false;
+
+	/** True when viewport, first local player, controller, PlayerInput, and input gates are ready. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bReady = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bViewportInputIgnored = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bPlayerControllerInputEnabled = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bHasPlayerInput = false;
+
+	/** Informational only: controller-level Enhanced Input can still run when the pawn input stack is disabled. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	bool bPawnInputEnabled = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString PlayerControllerName;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	int32 InputDeviceId = INDEX_NONE;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString DiagnosticCode;
+
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	FString Message;
+
+	/** Mouse buttons pressed through UnrealBridge and therefore eligible for bridge cleanup. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> TrackedPressedButtons;
+
+	/** Supported mouse buttons that UPlayerInput currently reports as down, regardless of ownership. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> PlayerInputPressedButtons;
+
+	/** Click buttons waiting for their next-frame automatic release. */
+	UPROPERTY(BlueprintReadOnly, Category = "UnrealBridge|Agent")
+	TArray<FString> PendingClickReleaseButtons;
+};
+
 /** A row from DefaultInput.ini's AxisMappings (F1). */
 USTRUCT(BlueprintType)
 struct FBridgeLegacyAxisMapping
@@ -446,6 +541,36 @@ public:
 	/** Remove a single sticky entry. Pass empty string to clear all. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
 	static bool ClearStickyInput(const FString& InputActionPath = TEXT(""));
+
+	// PIE gameplay mouse input. These functions bypass the OS cursor and Slate
+	// pointer routing. They submit synthetic FInputKeyEventArgs directly to the
+	// first PIE local player's UGameViewportClient, preserving the normal
+	// GameViewport -> PlayerController -> PlayerInput -> Enhanced Input chain.
+	// Existing InputAction injection above remains an independent API.
+
+	/** Send relative MouseX/MouseY deltas without moving the system cursor. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputResult SendPIEMouseMove(float DeltaX, float DeltaY);
+
+	/** Press or release one bridge-owned left/right/middle mouse button. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputResult SendPIEMouseButton(EBridgePIEMouseButton Button, bool bPressed);
+
+	/** Press a mouse button now and release it after at least one PIE input-processing frame. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputResult ClickPIEMouseButton(EBridgePIEMouseButton Button);
+
+	/** Send the physical-wheel-equivalent discrete key pulse plus MouseWheelAxis delta. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputResult SendPIEMouseWheel(float WheelDelta);
+
+	/** Release every mouse button currently owned by UnrealBridge. Idempotent. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputResult ReleaseAllPIEMouseButtons();
+
+	/** Inspect route readiness, diagnostics, tracked presses, and PlayerInput state. */
+	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Agent")
+	static FBridgePIEMouseInputState GetPIEMouseInputState();
 
 	// ─── State inspection + reset ─────────────────────────────────────
 

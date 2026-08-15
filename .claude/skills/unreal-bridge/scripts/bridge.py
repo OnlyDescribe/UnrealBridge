@@ -41,6 +41,7 @@ import argparse
 import datetime
 import json
 import logging
+import math
 import os
 import socket
 import struct
@@ -866,6 +867,119 @@ def cmd_list_editors(args):
     return 0
 
 
+def _pie_mouse_argument_error(args, message: str) -> int:
+    """Report a local pie-mouse argument error without contacting the editor."""
+    if args.json:
+        print(json.dumps({
+            "success": False,
+            "diagnostic_code": "invalid_argument",
+            "message": message,
+        }, ensure_ascii=False))
+    else:
+        print(f"ERROR: {message}", file=sys.stderr)
+    return 2
+
+
+def _pie_mouse_result_code(expression: str) -> str:
+    """Build remote code that prints one stable result payload and fails on rejection."""
+    return f'''import json
+import unreal
+__ub_mouse_result = {expression}
+__ub_mouse_payload = {{
+    "success": bool(__ub_mouse_result.success),
+    "handled": bool(__ub_mouse_result.handled),
+    "operation": str(__ub_mouse_result.operation),
+    "diagnostic_code": str(__ub_mouse_result.diagnostic_code),
+    "message": str(__ub_mouse_result.message),
+    "pressed_buttons": list(__ub_mouse_result.pressed_buttons),
+    "dispatch_frame": int(__ub_mouse_result.dispatch_frame),
+}}
+print(json.dumps(__ub_mouse_payload, ensure_ascii=False))
+if not __ub_mouse_result.success:
+    raise RuntimeError("PIE mouse input rejected [{{}}]: {{}}".format(
+        __ub_mouse_result.diagnostic_code, __ub_mouse_result.message))
+'''
+
+
+def cmd_pie_mouse(args) -> int:
+    """Send focus-independent mouse input to the first local player in PIE."""
+    action = args.pie_mouse_command
+
+    if action == "move":
+        if not math.isfinite(args.delta_x) or not math.isfinite(args.delta_y):
+            return _pie_mouse_argument_error(args, "move deltas must be finite numbers")
+        if args.delta_x == 0.0 and args.delta_y == 0.0:
+            return _pie_mouse_argument_error(args, "at least one move delta must be non-zero")
+        expression = (
+            "unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_move("
+            f"{args.delta_x!r}, {args.delta_y!r})"
+        )
+        return _execute(args, _pie_mouse_result_code(expression), mode="pie-mouse-move")
+
+    if action == "wheel":
+        if not math.isfinite(args.delta):
+            return _pie_mouse_argument_error(args, "wheel delta must be a finite number")
+        if args.delta == 0.0:
+            return _pie_mouse_argument_error(args, "wheel delta must be non-zero")
+        expression = (
+            "unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_wheel("
+            f"{args.delta!r})"
+        )
+        return _execute(args, _pie_mouse_result_code(expression), mode="pie-mouse-wheel")
+
+    if action == "button":
+        enum_name = {
+            "left": "LEFT",
+            "right": "RIGHT",
+            "middle": "MIDDLE",
+        }[args.button]
+        enum_expression = f"unreal.BridgePIEMouseButton.{enum_name}"
+        if args.button_action == "click":
+            expression = (
+                "unreal.UnrealBridgeGameplayLibrary.click_pie_mouse_button("
+                f"{enum_expression})"
+            )
+        else:
+            pressed = args.button_action == "press"
+            expression = (
+                "unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_button("
+                f"{enum_expression}, {pressed!r})"
+            )
+        return _execute(
+            args,
+            _pie_mouse_result_code(expression),
+            mode=f"pie-mouse-button-{args.button_action}",
+        )
+
+    if action == "release-all":
+        expression = "unreal.UnrealBridgeGameplayLibrary.release_all_pie_mouse_buttons()"
+        return _execute(args, _pie_mouse_result_code(expression), mode="pie-mouse-release-all")
+
+    if action == "state":
+        code = '''import json
+import unreal
+__ub_mouse_state = unreal.UnrealBridgeGameplayLibrary.get_pie_mouse_input_state()
+print(json.dumps({
+    "pie_active": bool(__ub_mouse_state.pie_active),
+    "ready": bool(__ub_mouse_state.ready),
+    "viewport_input_ignored": bool(__ub_mouse_state.viewport_input_ignored),
+    "player_controller_input_enabled": bool(__ub_mouse_state.player_controller_input_enabled),
+    "has_player_input": bool(__ub_mouse_state.has_player_input),
+    "pawn_input_enabled": bool(__ub_mouse_state.pawn_input_enabled),
+    "player_controller_name": str(__ub_mouse_state.player_controller_name),
+    "input_device_id": int(__ub_mouse_state.input_device_id),
+    "diagnostic_code": str(__ub_mouse_state.diagnostic_code),
+    "message": str(__ub_mouse_state.message),
+    "tracked_pressed_buttons": list(__ub_mouse_state.tracked_pressed_buttons),
+    "player_input_pressed_buttons": list(__ub_mouse_state.player_input_pressed_buttons),
+    "pending_click_release_buttons": list(__ub_mouse_state.pending_click_release_buttons),
+}, ensure_ascii=False))
+'''
+        return _execute(args, code, mode="pie-mouse-state")
+
+    return _pie_mouse_argument_error(args, f"unknown pie-mouse command: {action}")
+
+
 def _execute(args, code: str, mode: str = "exec", src: "str | None" = None) -> int:
     # AST preflight: catch bridge-call errors locally before any UE round-trip.
     # Warnings are printed but don't block. Errors short-circuit with exit 3.
@@ -1097,6 +1211,37 @@ def main():
     wpi_parser.add_argument("--poll-interval", type=float, default=1.0,
         help="Seconds between polls (default: 1.0)")
 
+    mouse_parser = subparsers.add_parser(
+        "pie-mouse",
+        help="Send focus-independent gameplay mouse input to the first local PIE player",
+    )
+    mouse_subparsers = mouse_parser.add_subparsers(
+        dest="pie_mouse_command", required=True
+    )
+    mouse_move = mouse_subparsers.add_parser(
+        "move", help="Send relative MouseX / MouseY deltas"
+    )
+    mouse_move.add_argument("delta_x", type=float, help="Relative MouseX delta")
+    mouse_move.add_argument("delta_y", type=float, help="Relative MouseY delta")
+
+    mouse_button = mouse_subparsers.add_parser(
+        "button", help="Press, release, or click a bridge-owned mouse button"
+    )
+    mouse_button.add_argument("button", choices=("left", "right", "middle"))
+    mouse_button.add_argument("button_action", choices=("press", "release", "click"))
+
+    mouse_wheel = mouse_subparsers.add_parser(
+        "wheel", help="Send a wheel key pulse plus MouseWheelAxis delta"
+    )
+    mouse_wheel.add_argument("delta", type=float, help="Non-zero wheel delta")
+
+    mouse_subparsers.add_parser(
+        "state", help="Inspect route readiness, diagnostics, and bridge-owned presses"
+    )
+    mouse_subparsers.add_parser(
+        "release-all", help="Release every mouse button currently owned by UnrealBridge"
+    )
+
     args = parser.parse_args()
 
     if args.command == "ping":
@@ -1119,6 +1264,8 @@ def main():
         sys.exit(cmd_preflight(args))
     elif args.command == "suggest":
         sys.exit(cmd_suggest(args))
+    elif args.command == "pie-mouse":
+        sys.exit(cmd_pie_mouse(args))
 
 
 if __name__ == "__main__":

@@ -85,6 +85,7 @@ python "${CLAUDE_SKILL_DIR}/scripts/bridge.py" [options] <command> [args]
 | `resume` | Unstick a paused BP breakpoint |
 | `list-editors` | Print every editor that responded to a discovery probe |
 | `wait-compile <material>` / `wait-pose-index <psd>` | Client-side polling helpers |
+| `pie-mouse move|button|wheel|state|release-all` | Focus-independent mouse input through the first local PIE player's GameViewport / PlayerInput chain |
 
 Optional flags: `--project=<name|path>` (disambiguate when >1 editors run; or env `UNREAL_BRIDGE_PROJECT`), `--endpoint=host:port`, `--token=<secret>`, `--timeout=<s>`, `--json`, `--no-preflight`.
 
@@ -199,7 +200,7 @@ Signatures are now mechanically enforced (preflight). References carry semantic 
 | Reactive handlers | `references/bridge-reactive.md` | Register Python on UE events (GameplayEvent / AnimNotify / MovementMode / Attribute / ActorLifecycle / InputAction). |
 | Navigation | `references/bridge-navigation-api.md` | NavMesh OBJ export |
 | Perf snapshots | `references/bridge-perf-api.md` | Structured FPS / GT / RT / GPU / draw calls / mem / UObject histogram |
-| Agent / Gameplay | `references/bridge-gameplay-api.md` | **Mandatory before driving the player pawn** — sticky inputs, camera steering, navmesh path planning. |
+| Agent / Gameplay | `references/bridge-gameplay-api.md` | **Mandatory before driving the player pawn** — sticky inputs, camera steering, navmesh path planning, and focus-independent PIE gameplay mouse input. |
 | UE Asset / Actor / Material | `references/ue-python-*.md` | Stdlib UE Python helpers (load, list, duplicate, spawn) |
 
 ## UMG deliverable loop (mandatory after UMG authoring)

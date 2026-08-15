@@ -25,6 +25,14 @@ namespace BridgeDebugState
 	void Unregister();
 }
 
+// Focus-independent PIE gameplay mouse input state/cleanup, defined in
+// UnrealBridgeGameplayLibrary.cpp and owned by this editor module's lifetime.
+namespace BridgePIEMouseInput
+{
+	void Register();
+	void Unregister();
+}
+
 // Always-on perf hook (frame-time histogram + hitch log) — defined in
 // UnrealBridgePerfLibrary.cpp, lifetime tied to the module.
 namespace BridgePerfFrameHook
@@ -133,6 +141,7 @@ namespace
 void FUnrealBridgeModule::StartupModule()
 {
 	BridgeDebugState::Register();
+	BridgePIEMouseInput::Register();
 	BridgePerfFrameHook::Register();
 
 	// Map /Plugin/UnrealBridge/ -> this plugin's Shaders/ dir so UMaterialExpressionCustom
@@ -275,6 +284,7 @@ void FUnrealBridgeModule::ShutdownModule()
 {
 	BridgePerfSampler::Shutdown();
 	BridgePerfFrameHook::Unregister();
+	BridgePIEMouseInput::Unregister();
 	BridgeDebugState::Unregister();
 
 	if (Discovery.IsValid())

@@ -6,10 +6,14 @@
 #include "InputModifiers.h"
 
 #include "Editor.h"
+#include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerInput.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -37,6 +41,8 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Framework/Application/SlateApplication.h"
+#include "GenericPlatform/GenericPlatformInputDeviceMapper.h"
+#include "InputKeyEventArgs.h"
 #include "InputCoreTypes.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -56,6 +62,9 @@
 #include "K2Node_EnhancedInputAction.h"
 #include "K2Node_GetInputActionValue.h"
 #include "Containers/Ticker.h"
+#include "Misc/App.h"
+#include "Runtime/Launch/Resources/Version.h"
+#include "UnrealEngine.h"
 #include "UnrealBridgeReactiveSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUnrealBridgeAgent, Log, All);
@@ -181,6 +190,487 @@ namespace BridgeAgentImpl
 			}
 		}
 		return nullptr;
+	}
+
+	// ─── Focus-independent PIE gameplay mouse input ─────────────────────
+
+	struct FPIEMouseTarget
+	{
+		UWorld* World = nullptr;
+		ULocalPlayer* LocalPlayer = nullptr;
+		APlayerController* PlayerController = nullptr;
+		UGameViewportClient* ViewportClient = nullptr;
+		FViewport* Viewport = nullptr;
+		FInputDeviceId InputDevice = INPUTDEVICEID_NONE;
+	};
+
+	static TWeakObjectPtr<UWorld> GPIEMouseOwnerWorld;
+	static TWeakObjectPtr<APlayerController> GPIEMouseOwnerController;
+	static TWeakObjectPtr<UGameViewportClient> GPIEMouseOwnerViewportClient;
+	static FInputDeviceId GPIEMouseOwnerInputDevice = INPUTDEVICEID_NONE;
+	static TSet<FKey> GPIEMousePressedButtons;
+	static TMap<FKey, uint64> GPIEMouseAutoReleaseFrames;
+	static FTSTicker::FDelegateHandle GPIEMouseTicker;
+	static FDelegateHandle GPIEMousePrePIEEndedHandle;
+	static FDelegateHandle GPIEMouseWorldCleanupHandle;
+
+	static const TArray<FKey>& GetSupportedPIEMouseButtons()
+	{
+		static const TArray<FKey> Buttons = {
+			EKeys::LeftMouseButton,
+			EKeys::RightMouseButton,
+			EKeys::MiddleMouseButton,
+		};
+		return Buttons;
+	}
+
+	static FKey GetPIEMouseButtonKey(EBridgePIEMouseButton Button)
+	{
+		switch (Button)
+		{
+		case EBridgePIEMouseButton::Right:
+			return EKeys::RightMouseButton;
+		case EBridgePIEMouseButton::Middle:
+			return EKeys::MiddleMouseButton;
+		case EBridgePIEMouseButton::Left:
+		default:
+			return EKeys::LeftMouseButton;
+		}
+	}
+
+	static TArray<FString> GetTrackedPIEMouseButtonNames()
+	{
+		TArray<FString> Names;
+		for (const FKey& Key : GetSupportedPIEMouseButtons())
+		{
+			if (GPIEMousePressedButtons.Contains(Key))
+			{
+				Names.Add(Key.GetFName().ToString());
+			}
+		}
+		return Names;
+	}
+
+	static TArray<FString> GetPendingPIEMouseButtonNames()
+	{
+		TArray<FString> Names;
+		for (const FKey& Key : GetSupportedPIEMouseButtons())
+		{
+			if (GPIEMouseAutoReleaseFrames.Contains(Key))
+			{
+				Names.Add(Key.GetFName().ToString());
+			}
+		}
+		return Names;
+	}
+
+	static bool HasPIEWorldContext()
+	{
+		if (!GEditor)
+		{
+			return false;
+		}
+		for (const FWorldContext& Context : GEditor->GetWorldContexts())
+		{
+			if (Context.WorldType == EWorldType::PIE && Context.World())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static bool ResolvePIEMouseTarget(
+		FPIEMouseTarget& OutTarget,
+		FString& OutDiagnosticCode,
+		FString& OutMessage,
+		bool bRequireInputEnabled)
+	{
+		OutTarget = FPIEMouseTarget();
+		OutDiagnosticCode.Reset();
+		OutMessage.Reset();
+
+		if (!GEditor)
+		{
+			OutDiagnosticCode = TEXT("no_pie");
+			OutMessage = TEXT("The Unreal Editor is unavailable, so there is no PIE session.");
+			return false;
+		}
+
+		bool bFoundPIEContext = false;
+		for (const FWorldContext& Context : GEditor->GetWorldContexts())
+		{
+			if (Context.WorldType != EWorldType::PIE || !Context.World())
+			{
+				continue;
+			}
+			bFoundPIEContext = true;
+			if (Context.World()->HasBegunPlay())
+			{
+				OutTarget.World = Context.World();
+				break;
+			}
+		}
+
+		if (!OutTarget.World)
+		{
+			OutDiagnosticCode = bFoundPIEContext ? TEXT("pie_not_ready") : TEXT("no_pie");
+			OutMessage = bFoundPIEContext
+				? TEXT("A PIE world exists but BeginPlay has not completed.")
+				: TEXT("No active PIE session was found.");
+			return false;
+		}
+
+		UGameInstance* GameInstance = OutTarget.World->GetGameInstance();
+		if (!GameInstance)
+		{
+			OutDiagnosticCode = TEXT("no_game_instance");
+			OutMessage = TEXT("The active PIE world has no GameInstance.");
+			return false;
+		}
+
+		OutTarget.LocalPlayer = GameInstance->GetFirstGamePlayer();
+		if (!OutTarget.LocalPlayer)
+		{
+			OutDiagnosticCode = TEXT("no_local_player");
+			OutMessage = TEXT("The active PIE session has no local player.");
+			return false;
+		}
+
+		OutTarget.PlayerController = OutTarget.LocalPlayer->GetPlayerController(OutTarget.World);
+		if (!OutTarget.PlayerController)
+		{
+			OutDiagnosticCode = TEXT("no_player_controller");
+			OutMessage = TEXT("The first PIE local player has no PlayerController.");
+			return false;
+		}
+
+		OutTarget.ViewportClient = OutTarget.LocalPlayer->ViewportClient;
+		if (!OutTarget.ViewportClient)
+		{
+			OutDiagnosticCode = TEXT("no_game_viewport");
+			OutMessage = TEXT("The first PIE local player has no GameViewportClient.");
+			return false;
+		}
+
+		OutTarget.Viewport = OutTarget.ViewportClient->Viewport;
+		if (!OutTarget.Viewport)
+		{
+			OutDiagnosticCode = TEXT("no_viewport");
+			OutMessage = TEXT("The PIE GameViewportClient has no platform viewport.");
+			return false;
+		}
+
+		if (!OutTarget.PlayerController->PlayerInput)
+		{
+			OutDiagnosticCode = TEXT("no_player_input");
+			OutMessage = TEXT("The first PIE PlayerController has no PlayerInput object.");
+			return false;
+		}
+
+		IPlatformInputDeviceMapper& Mapper = IPlatformInputDeviceMapper::Get();
+		const FPlatformUserId PlatformUser = OutTarget.LocalPlayer->GetPlatformUserId();
+		OutTarget.InputDevice = Mapper.GetPrimaryInputDeviceForUser(PlatformUser);
+		if (!OutTarget.InputDevice.IsValid())
+		{
+			OutTarget.InputDevice = Mapper.GetDefaultInputDevice();
+		}
+		if (!OutTarget.InputDevice.IsValid())
+		{
+			OutDiagnosticCode = TEXT("no_input_device");
+			OutMessage = TEXT("No input device is available for the first PIE local player.");
+			return false;
+		}
+
+		if (GetDefault<UInputSettings>()->bFilterInputByPlatformUser
+			&& Mapper.GetUserForInputDevice(OutTarget.InputDevice) != PlatformUser)
+		{
+			OutDiagnosticCode = TEXT("input_device_not_owned");
+			OutMessage = TEXT("The resolved mouse input device is not owned by the first PIE local player.");
+			return false;
+		}
+
+		if (bRequireInputEnabled && OutTarget.ViewportClient->IgnoreInput())
+		{
+			OutDiagnosticCode = TEXT("viewport_input_ignored");
+			OutMessage = TEXT("The PIE GameViewportClient is currently ignoring gameplay input.");
+			return false;
+		}
+
+		if (bRequireInputEnabled && !OutTarget.PlayerController->InputEnabled())
+		{
+			OutDiagnosticCode = TEXT("player_controller_input_disabled");
+			OutMessage = TEXT("Input is disabled on the first PIE PlayerController.");
+			return false;
+		}
+
+		if (bRequireInputEnabled)
+		{
+			if (const APawn* Pawn = OutTarget.PlayerController->GetPawn())
+			{
+				if (!Pawn->InputEnabled())
+				{
+					OutDiagnosticCode = TEXT("pawn_input_disabled");
+					OutMessage = TEXT("Input is disabled on the first PIE player's pawn.");
+					return false;
+				}
+			}
+		}
+
+		OutDiagnosticCode = TEXT("ok");
+		OutMessage = TEXT("The first PIE local player's gameplay input route is ready.");
+		return true;
+	}
+
+	static FInputKeyEventArgs MakePIEMouseEventArgs(
+		const FPIEMouseTarget& Target,
+		const FKey& Key,
+		EInputEvent Event,
+		float Amount,
+		int32 NumSamples = -1)
+	{
+#if ENGINE_MAJOR_VERSION > 5 || (ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 6)
+		FInputKeyEventArgs Args = FInputKeyEventArgs::CreateSimulated(
+			Key, Event, Amount, NumSamples, Target.InputDevice, false, Target.Viewport);
+#else
+		FInputKeyEventArgs Args(
+			Target.Viewport, Target.InputDevice.GetId(), Key, Event, Amount, false);
+		if (NumSamples >= 0)
+		{
+			Args.NumSamples = NumSamples;
+		}
+#endif
+		if (Event == IE_Axis)
+		{
+			Args.DeltaTime = FMath::Max(static_cast<float>(FApp::GetDeltaTime()), SMALL_NUMBER);
+		}
+		return Args;
+	}
+
+	static bool DispatchPIEMouseKey(
+		const FPIEMouseTarget& Target,
+		const FKey& Key,
+		EInputEvent Event,
+		float Amount,
+		bool bThroughViewport)
+	{
+		FInputKeyEventArgs Args = MakePIEMouseEventArgs(Target, Key, Event, Amount);
+		FScopedConditionalWorldSwitcher WorldSwitcher(Target.World);
+		return bThroughViewport
+			? Target.ViewportClient->InputKey(Args)
+			: Target.PlayerController->InputKey(Args);
+	}
+
+	static bool DispatchPIEMouseAxis(
+		const FPIEMouseTarget& Target,
+		const FKey& Key,
+		float Delta)
+	{
+		FInputKeyEventArgs Args = MakePIEMouseEventArgs(Target, Key, IE_Axis, Delta, 1);
+		FScopedConditionalWorldSwitcher WorldSwitcher(Target.World);
+		return Target.ViewportClient->InputAxis(Args);
+	}
+
+	static bool BuildPIEMouseOwnerTarget(FPIEMouseTarget& OutTarget)
+	{
+		OutTarget = FPIEMouseTarget();
+		OutTarget.World = GPIEMouseOwnerWorld.Get();
+		OutTarget.PlayerController = GPIEMouseOwnerController.Get();
+		OutTarget.ViewportClient = GPIEMouseOwnerViewportClient.Get();
+		OutTarget.Viewport = OutTarget.ViewportClient ? OutTarget.ViewportClient->Viewport : nullptr;
+		OutTarget.InputDevice = GPIEMouseOwnerInputDevice;
+		return OutTarget.World && OutTarget.PlayerController && OutTarget.ViewportClient
+			&& OutTarget.PlayerController->PlayerInput && OutTarget.InputDevice.IsValid();
+	}
+
+	static void StopPIEMouseTicker()
+	{
+		if (GPIEMouseTicker.IsValid())
+		{
+			FTSTicker::GetCoreTicker().RemoveTicker(GPIEMouseTicker);
+			GPIEMouseTicker.Reset();
+		}
+	}
+
+	static void ResetPIEMouseOwnership()
+	{
+		GPIEMousePressedButtons.Reset();
+		GPIEMouseAutoReleaseFrames.Reset();
+		GPIEMouseOwnerWorld.Reset();
+		GPIEMouseOwnerController.Reset();
+		GPIEMouseOwnerViewportClient.Reset();
+		GPIEMouseOwnerInputDevice = INPUTDEVICEID_NONE;
+	}
+
+	static int32 ReleaseOwnedPIEMouseButtonsDirect(const TCHAR* Reason)
+	{
+		const int32 ReleasedCount = GPIEMousePressedButtons.Num();
+		FPIEMouseTarget OwnerTarget;
+		if (BuildPIEMouseOwnerTarget(OwnerTarget))
+		{
+			for (const FKey& Key : GetSupportedPIEMouseButtons())
+			{
+				if (GPIEMousePressedButtons.Contains(Key))
+				{
+					DispatchPIEMouseKey(OwnerTarget, Key, IE_Released, 1.0f, false);
+				}
+			}
+		}
+
+		if (ReleasedCount > 0)
+		{
+			UE_LOG(LogUnrealBridgeAgent, Log,
+				TEXT("PIE mouse cleanup released %d bridge-owned button(s): %s"),
+				ReleasedCount, Reason);
+		}
+		ResetPIEMouseOwnership();
+		return ReleasedCount;
+	}
+
+	static void AdoptPIEMouseTarget(const FPIEMouseTarget& Target)
+	{
+		const bool bTargetChanged = GPIEMousePressedButtons.Num() > 0
+			&& (GPIEMouseOwnerWorld.Get() != Target.World
+				|| GPIEMouseOwnerController.Get() != Target.PlayerController);
+		if (bTargetChanged)
+		{
+			ReleaseOwnedPIEMouseButtonsDirect(TEXT("PIE mouse target changed"));
+		}
+
+		GPIEMouseOwnerWorld = Target.World;
+		GPIEMouseOwnerController = Target.PlayerController;
+		GPIEMouseOwnerViewportClient = Target.ViewportClient;
+		GPIEMouseOwnerInputDevice = Target.InputDevice;
+	}
+
+	static FBridgePIEMouseInputResult MakePIEMouseResult(
+		const FString& Operation,
+		bool bSuccess,
+		bool bHandled,
+		const FString& DiagnosticCode,
+		const FString& Message)
+	{
+		FBridgePIEMouseInputResult Result;
+		Result.bSuccess = bSuccess;
+		Result.bHandled = bHandled;
+		Result.Operation = Operation;
+		Result.DiagnosticCode = DiagnosticCode;
+		Result.Message = Message;
+		Result.PressedButtons = GetTrackedPIEMouseButtonNames();
+		Result.DispatchFrame = static_cast<int64>(GFrameCounter);
+		return Result;
+	}
+
+	static bool PIEMouseAutoReleaseTick(float /*DeltaTime*/)
+	{
+		TArray<FKey> DueKeys;
+		for (const TPair<FKey, uint64>& Pair : GPIEMouseAutoReleaseFrames)
+		{
+			if (GFrameCounter >= Pair.Value)
+			{
+				DueKeys.Add(Pair.Key);
+			}
+		}
+
+		FPIEMouseTarget OwnerTarget;
+		const bool bHasOwnerTarget = BuildPIEMouseOwnerTarget(OwnerTarget);
+		for (const FKey& Key : DueKeys)
+		{
+			if (GPIEMousePressedButtons.Contains(Key) && bHasOwnerTarget)
+			{
+				const APawn* Pawn = OwnerTarget.PlayerController->GetPawn();
+				const bool bInputGatesOpen = !OwnerTarget.ViewportClient->IgnoreInput()
+					&& OwnerTarget.PlayerController->InputEnabled()
+					&& (!Pawn || Pawn->InputEnabled());
+				DispatchPIEMouseKey(OwnerTarget, Key, IE_Released, 1.0f, bInputGatesOpen);
+			}
+			GPIEMousePressedButtons.Remove(Key);
+			GPIEMouseAutoReleaseFrames.Remove(Key);
+		}
+
+		if (!bHasOwnerTarget && GPIEMousePressedButtons.Num() > 0)
+		{
+			UE_LOG(LogUnrealBridgeAgent, Warning,
+				TEXT("PIE mouse click cleanup lost its PIE target; clearing %d tracked button(s)"),
+				GPIEMousePressedButtons.Num());
+			ResetPIEMouseOwnership();
+		}
+
+		if (GPIEMouseAutoReleaseFrames.Num() == 0)
+		{
+			GPIEMouseTicker.Reset();
+			return false;
+		}
+		return true;
+	}
+
+	static void EnsurePIEMouseTickerRunning()
+	{
+		if (!GPIEMouseTicker.IsValid())
+		{
+			GPIEMouseTicker = FTSTicker::GetCoreTicker().AddTicker(
+				FTickerDelegate::CreateStatic(&PIEMouseAutoReleaseTick), 0.0f);
+		}
+	}
+
+	static void OnPrePIEEnded(bool /*bIsSimulating*/)
+	{
+		StopPIEMouseTicker();
+		ReleaseOwnedPIEMouseButtonsDirect(TEXT("PrePIEEnded"));
+	}
+
+	static void OnPIEMouseWorldCleanup(
+		UWorld* World,
+		bool /*bSessionEnded*/,
+		bool /*bCleanupResources*/)
+	{
+		if (World && GPIEMouseOwnerWorld.Get() == World)
+		{
+			StopPIEMouseTicker();
+			ReleaseOwnedPIEMouseButtonsDirect(TEXT("PIE world cleanup"));
+		}
+	}
+
+	static void RegisterPIEMouseInput()
+	{
+		if (!GPIEMousePrePIEEndedHandle.IsValid())
+		{
+			GPIEMousePrePIEEndedHandle = FEditorDelegates::PrePIEEnded.AddStatic(&OnPrePIEEnded);
+		}
+		if (!GPIEMouseWorldCleanupHandle.IsValid())
+		{
+			GPIEMouseWorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddStatic(
+				&OnPIEMouseWorldCleanup);
+		}
+	}
+
+	static void UnregisterPIEMouseInput()
+	{
+		StopPIEMouseTicker();
+		ReleaseOwnedPIEMouseButtonsDirect(TEXT("UnrealBridge module shutdown"));
+		if (GPIEMousePrePIEEndedHandle.IsValid())
+		{
+			FEditorDelegates::PrePIEEnded.Remove(GPIEMousePrePIEEndedHandle);
+			GPIEMousePrePIEEndedHandle.Reset();
+		}
+		if (GPIEMouseWorldCleanupHandle.IsValid())
+		{
+			FWorldDelegates::OnWorldCleanup.Remove(GPIEMouseWorldCleanupHandle);
+			GPIEMouseWorldCleanupHandle.Reset();
+		}
+	}
+}
+
+namespace BridgePIEMouseInput
+{
+	void Register()
+	{
+		BridgeAgentImpl::RegisterPIEMouseInput();
+	}
+
+	void Unregister()
+	{
+		BridgeAgentImpl::UnregisterPIEMouseInput();
 	}
 }
 
@@ -560,6 +1050,346 @@ bool UUnrealBridgeGameplayLibrary::ClearStickyInput(const FString& InputActionPa
 	const int32 Removed = BridgeAgentImpl::GStickyInputs.Remove(InputActionPath);
 	BridgeAgentImpl::StopStickyTickerIfIdle();
 	return Removed > 0;
+}
+
+FBridgePIEMouseInputResult UUnrealBridgeGameplayLibrary::SendPIEMouseMove(float DeltaX, float DeltaY)
+{
+	const FString Operation = TEXT("move");
+	if (!FMath::IsFinite(DeltaX) || !FMath::IsFinite(DeltaY))
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("invalid_delta"),
+			TEXT("Mouse movement deltas must be finite numbers."));
+	}
+	if (DeltaX == 0.0f && DeltaY == 0.0f)
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("zero_delta"),
+			TEXT("At least one mouse movement delta must be non-zero."));
+	}
+
+	BridgeAgentImpl::FPIEMouseTarget Target;
+	FString DiagnosticCode;
+	FString Message;
+	if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, true))
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, DiagnosticCode, Message);
+	}
+
+	BridgeAgentImpl::AdoptPIEMouseTarget(Target);
+	bool bHandled = true;
+	if (DeltaX != 0.0f)
+	{
+		bHandled = BridgeAgentImpl::DispatchPIEMouseAxis(Target, EKeys::MouseX, DeltaX) && bHandled;
+	}
+	if (DeltaY != 0.0f)
+	{
+		bHandled = BridgeAgentImpl::DispatchPIEMouseAxis(Target, EKeys::MouseY, DeltaY) && bHandled;
+	}
+
+	return BridgeAgentImpl::MakePIEMouseResult(
+		Operation, true, bHandled, TEXT("ok"),
+		FString::Printf(
+			TEXT("Dispatched relative MouseX=%.3f and MouseY=%.3f to the first PIE local player."),
+			DeltaX, DeltaY));
+}
+
+FBridgePIEMouseInputResult UUnrealBridgeGameplayLibrary::SendPIEMouseButton(
+	EBridgePIEMouseButton Button,
+	bool bPressed)
+{
+	const FKey Key = BridgeAgentImpl::GetPIEMouseButtonKey(Button);
+	const FString Operation = bPressed ? TEXT("button_press") : TEXT("button_release");
+
+	if (bPressed)
+	{
+		BridgeAgentImpl::FPIEMouseTarget Target;
+		FString DiagnosticCode;
+		FString Message;
+		if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, true))
+		{
+			return BridgeAgentImpl::MakePIEMouseResult(
+				Operation, false, false, DiagnosticCode, Message);
+		}
+
+		BridgeAgentImpl::AdoptPIEMouseTarget(Target);
+		if (BridgeAgentImpl::GPIEMousePressedButtons.Contains(Key))
+		{
+			return BridgeAgentImpl::MakePIEMouseResult(
+				Operation, false, false, TEXT("button_already_pressed"),
+				FString::Printf(TEXT("%s is already held by UnrealBridge."), *Key.GetFName().ToString()));
+		}
+		if (Target.PlayerController->PlayerInput->IsPressed(Key))
+		{
+			return BridgeAgentImpl::MakePIEMouseResult(
+				Operation, false, false, TEXT("physical_button_already_pressed"),
+				FString::Printf(
+					TEXT("%s is already down in PlayerInput and is not owned by UnrealBridge; refusing to take ownership."),
+					*Key.GetFName().ToString()));
+		}
+
+		const bool bHandled = BridgeAgentImpl::DispatchPIEMouseKey(
+			Target, Key, IE_Pressed, 1.0f, true);
+		BridgeAgentImpl::GPIEMousePressedButtons.Add(Key);
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, true, bHandled, TEXT("ok"),
+			FString::Printf(
+				TEXT("Pressed %s through the first PIE local player's GameViewport input route."),
+				*Key.GetFName().ToString()));
+	}
+
+	if (!BridgeAgentImpl::GPIEMousePressedButtons.Contains(Key))
+	{
+		BridgeAgentImpl::FPIEMouseTarget Target;
+		FString DiagnosticCode;
+		FString Message;
+		if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, false))
+		{
+			return BridgeAgentImpl::MakePIEMouseResult(
+				Operation, false, false, DiagnosticCode, Message);
+		}
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("button_not_owned"),
+			FString::Printf(
+				TEXT("%s is not held by UnrealBridge; no release was sent so physical input state is preserved."),
+				*Key.GetFName().ToString()));
+	}
+
+	BridgeAgentImpl::FPIEMouseTarget OwnerTarget;
+	if (!BridgeAgentImpl::BuildPIEMouseOwnerTarget(OwnerTarget))
+	{
+		BridgeAgentImpl::GPIEMousePressedButtons.Remove(Key);
+		BridgeAgentImpl::GPIEMouseAutoReleaseFrames.Remove(Key);
+		if (BridgeAgentImpl::GPIEMousePressedButtons.Num() == 0)
+		{
+			BridgeAgentImpl::StopPIEMouseTicker();
+			BridgeAgentImpl::ResetPIEMouseOwnership();
+		}
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("owner_target_lost"),
+			TEXT("The owning PIE input target disappeared; bridge tracking was cleared but no release could be dispatched."));
+	}
+
+	const APawn* Pawn = OwnerTarget.PlayerController->GetPawn();
+	const bool bInputGatesOpen = OwnerTarget.World->HasBegunPlay()
+		&& !OwnerTarget.ViewportClient->IgnoreInput()
+		&& OwnerTarget.PlayerController->InputEnabled()
+		&& (!Pawn || Pawn->InputEnabled());
+	const bool bHandled = BridgeAgentImpl::DispatchPIEMouseKey(
+		OwnerTarget, Key, IE_Released, 1.0f, bInputGatesOpen);
+	BridgeAgentImpl::GPIEMousePressedButtons.Remove(Key);
+	BridgeAgentImpl::GPIEMouseAutoReleaseFrames.Remove(Key);
+	if (BridgeAgentImpl::GPIEMousePressedButtons.Num() == 0)
+	{
+		BridgeAgentImpl::StopPIEMouseTicker();
+		BridgeAgentImpl::ResetPIEMouseOwnership();
+	}
+
+	return BridgeAgentImpl::MakePIEMouseResult(
+		Operation, true, bHandled,
+		bInputGatesOpen ? TEXT("ok") : TEXT("ok_release_bypassed_input_gate"),
+		bInputGatesOpen
+			? FString::Printf(
+				TEXT("Released %s through the first PIE local player's GameViewport input route."),
+				*Key.GetFName().ToString())
+			: FString::Printf(
+				TEXT("Released %s directly through PlayerController/PlayerInput because a gameplay input gate was closed."),
+				*Key.GetFName().ToString()));
+}
+
+FBridgePIEMouseInputResult UUnrealBridgeGameplayLibrary::ClickPIEMouseButton(
+	EBridgePIEMouseButton Button)
+{
+	const FKey Key = BridgeAgentImpl::GetPIEMouseButtonKey(Button);
+	FBridgePIEMouseInputResult Result = SendPIEMouseButton(Button, true);
+	Result.Operation = TEXT("click");
+	if (!Result.bSuccess)
+	{
+		return Result;
+	}
+
+	// The bridge exec itself may run late in a frame. Waiting for GFrameCounter+2
+	// guarantees at least one complete PlayerInput processing opportunity between
+	// the press and release, so Enhanced Input observes both edges.
+	BridgeAgentImpl::GPIEMouseAutoReleaseFrames.Add(Key, GFrameCounter + 2);
+	BridgeAgentImpl::EnsurePIEMouseTickerRunning();
+	Result.DiagnosticCode = TEXT("ok");
+	Result.Message = FString::Printf(
+		TEXT("Pressed %s; its bridge-owned release is scheduled after at least one PIE input-processing frame."),
+		*Key.GetFName().ToString());
+	Result.PressedButtons = BridgeAgentImpl::GetTrackedPIEMouseButtonNames();
+	return Result;
+}
+
+FBridgePIEMouseInputResult UUnrealBridgeGameplayLibrary::SendPIEMouseWheel(float WheelDelta)
+{
+	const FString Operation = TEXT("wheel");
+	if (!FMath::IsFinite(WheelDelta))
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("invalid_delta"),
+			TEXT("The mouse wheel delta must be a finite number."));
+	}
+	if (WheelDelta == 0.0f)
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("zero_delta"),
+			TEXT("The mouse wheel delta must be non-zero."));
+	}
+
+	BridgeAgentImpl::FPIEMouseTarget Target;
+	FString DiagnosticCode;
+	FString Message;
+	if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, true))
+	{
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, DiagnosticCode, Message);
+	}
+
+	BridgeAgentImpl::AdoptPIEMouseTarget(Target);
+	const FKey DirectionKey = WheelDelta < 0.0f ? EKeys::MouseScrollDown : EKeys::MouseScrollUp;
+	const bool bPressHandled = BridgeAgentImpl::DispatchPIEMouseKey(
+		Target, DirectionKey, IE_Pressed, 1.0f, true);
+	const bool bReleaseHandled = BridgeAgentImpl::DispatchPIEMouseKey(
+		Target, DirectionKey, IE_Released, 1.0f, true);
+	const bool bAxisHandled = BridgeAgentImpl::DispatchPIEMouseAxis(
+		Target, EKeys::MouseWheelAxis, WheelDelta);
+
+	return BridgeAgentImpl::MakePIEMouseResult(
+		Operation, true, bPressHandled && bReleaseHandled && bAxisHandled, TEXT("ok"),
+		FString::Printf(
+			TEXT("Dispatched %s press/release plus MouseWheelAxis=%.3f to the first PIE local player."),
+			*DirectionKey.GetFName().ToString(), WheelDelta));
+}
+
+FBridgePIEMouseInputResult UUnrealBridgeGameplayLibrary::ReleaseAllPIEMouseButtons()
+{
+	const FString Operation = TEXT("release_all");
+	if (BridgeAgentImpl::GPIEMousePressedButtons.Num() == 0)
+	{
+		BridgeAgentImpl::FPIEMouseTarget Target;
+		FString DiagnosticCode;
+		FString Message;
+		if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, false))
+		{
+			return BridgeAgentImpl::MakePIEMouseResult(
+				Operation, true, false,
+				DiagnosticCode == TEXT("no_pie") ? TEXT("no_pie_no_buttons") : DiagnosticCode,
+				Message + TEXT(" There are no bridge-owned mouse buttons to release."));
+		}
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, true, false, TEXT("ok_no_buttons"),
+			TEXT("There are no bridge-owned mouse buttons to release."));
+	}
+
+	const int32 ReleaseCount = BridgeAgentImpl::GPIEMousePressedButtons.Num();
+	BridgeAgentImpl::FPIEMouseTarget OwnerTarget;
+	if (!BridgeAgentImpl::BuildPIEMouseOwnerTarget(OwnerTarget))
+	{
+		BridgeAgentImpl::StopPIEMouseTicker();
+		BridgeAgentImpl::ResetPIEMouseOwnership();
+		return BridgeAgentImpl::MakePIEMouseResult(
+			Operation, false, false, TEXT("owner_target_lost"),
+			FString::Printf(
+				TEXT("The owning PIE input target disappeared; cleared tracking for %d button(s), but could not dispatch releases."),
+				ReleaseCount));
+	}
+
+	const APawn* Pawn = OwnerTarget.PlayerController->GetPawn();
+	const bool bInputGatesOpen = OwnerTarget.World->HasBegunPlay()
+		&& !OwnerTarget.ViewportClient->IgnoreInput()
+		&& OwnerTarget.PlayerController->InputEnabled()
+		&& (!Pawn || Pawn->InputEnabled());
+	bool bHandled = true;
+	for (const FKey& Key : BridgeAgentImpl::GetSupportedPIEMouseButtons())
+	{
+		if (BridgeAgentImpl::GPIEMousePressedButtons.Contains(Key))
+		{
+			bHandled = BridgeAgentImpl::DispatchPIEMouseKey(
+				OwnerTarget, Key, IE_Released, 1.0f, bInputGatesOpen) && bHandled;
+		}
+	}
+	BridgeAgentImpl::StopPIEMouseTicker();
+	BridgeAgentImpl::ResetPIEMouseOwnership();
+
+	return BridgeAgentImpl::MakePIEMouseResult(
+		Operation, true, bHandled,
+		bInputGatesOpen ? TEXT("ok") : TEXT("ok_release_bypassed_input_gate"),
+		FString::Printf(
+			TEXT("Released %d bridge-owned PIE mouse button(s)%s."),
+			ReleaseCount,
+			bInputGatesOpen ? TEXT(" through the GameViewport input route")
+				: TEXT(" directly through PlayerController/PlayerInput because an input gate was closed")));
+}
+
+FBridgePIEMouseInputState UUnrealBridgeGameplayLibrary::GetPIEMouseInputState()
+{
+	FBridgePIEMouseInputState State;
+	State.bPIEActive = BridgeAgentImpl::HasPIEWorldContext();
+	State.TrackedPressedButtons = BridgeAgentImpl::GetTrackedPIEMouseButtonNames();
+	State.PendingClickReleaseButtons = BridgeAgentImpl::GetPendingPIEMouseButtonNames();
+
+	BridgeAgentImpl::FPIEMouseTarget Target;
+	FString DiagnosticCode;
+	FString Message;
+	if (!BridgeAgentImpl::ResolvePIEMouseTarget(Target, DiagnosticCode, Message, false))
+	{
+		State.DiagnosticCode = DiagnosticCode;
+		State.Message = Message;
+		return State;
+	}
+
+	State.PlayerControllerName = Target.PlayerController->GetName();
+	State.InputDeviceId = Target.InputDevice.GetId();
+	State.bViewportInputIgnored = Target.ViewportClient->IgnoreInput();
+	State.bPlayerControllerInputEnabled = Target.PlayerController->InputEnabled();
+	State.bHasPlayerInput = Target.PlayerController->PlayerInput != nullptr;
+	const APawn* Pawn = Target.PlayerController->GetPawn();
+	State.bPawnInputEnabled = Pawn && Pawn->InputEnabled();
+	State.bReady = !State.bViewportInputIgnored
+		&& State.bPlayerControllerInputEnabled
+		&& (!Pawn || State.bPawnInputEnabled);
+
+	if (State.bViewportInputIgnored)
+	{
+		State.DiagnosticCode = TEXT("viewport_input_ignored");
+		State.Message = TEXT("The PIE GameViewportClient is currently ignoring gameplay input.");
+	}
+	else if (!State.bPlayerControllerInputEnabled)
+	{
+		State.DiagnosticCode = TEXT("player_controller_input_disabled");
+		State.Message = TEXT("Input is disabled on the first PIE PlayerController.");
+	}
+	else if (Pawn && !State.bPawnInputEnabled)
+	{
+		State.DiagnosticCode = TEXT("pawn_input_disabled");
+		State.Message = TEXT("Input is disabled on the first PIE player's pawn.");
+	}
+	else
+	{
+		State.DiagnosticCode = TEXT("ok");
+		State.Message = TEXT("The first PIE local player's gameplay mouse input route is ready.");
+	}
+
+	BridgeAgentImpl::FPIEMouseTarget StateOwnerTarget;
+	UPlayerInput* StatePlayerInput = Target.PlayerController->PlayerInput;
+	if (BridgeAgentImpl::BuildPIEMouseOwnerTarget(StateOwnerTarget))
+	{
+		StatePlayerInput = StateOwnerTarget.PlayerController->PlayerInput;
+	}
+	if (StatePlayerInput)
+	{
+		for (const FKey& Key : BridgeAgentImpl::GetSupportedPIEMouseButtons())
+		{
+			if (StatePlayerInput->IsPressed(Key))
+			{
+				State.PlayerInputPressedButtons.Add(Key.GetFName().ToString());
+			}
+		}
+	}
+
+	return State;
 }
 
 // ─── Adaptive trigger ──────────────────────────────────────────────────

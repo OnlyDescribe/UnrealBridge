@@ -1297,6 +1297,105 @@ else:
 
 ---
 
+## Focus-independent PIE gameplay mouse input
+
+Use this path when automation must behave like a mouse device for gameplay
+without moving the system cursor, focusing the Editor, or capturing the user's
+mouse. It submits simulated `FInputKeyEventArgs` directly to the first local
+PIE player's `UGameViewportClient::InputKey` / `InputAxis` route:
+
+```text
+UnrealBridge -> PIE GameViewportClient -> PlayerController -> PlayerInput
+             -> Enhanced Input mappings / modifiers / triggers / bindings
+```
+
+It does **not** call an operating-system input API, `FSlateApplication`, a UMG
+delegate such as `OnClicked`, or a Slate pointer simulator. The existing
+InputAction injection functions remain separate and unchanged.
+
+### Python API
+
+```python
+import unreal
+
+G = unreal.UnrealBridgeGameplayLibrary
+Button = unreal.BridgePIEMouseButton
+
+# Relative motion; no absolute cursor position is read or written.
+move = G.send_pie_mouse_move(24.0, -8.0)
+
+# Explicit bridge-owned hold and release.
+down = G.send_pie_mouse_button(Button.LEFT, True)
+up = G.send_pie_mouse_button(Button.LEFT, False)
+
+# Click releases in-process after at least one complete input-processing frame.
+click = G.click_pie_mouse_button(Button.RIGHT)
+
+# Mirrors FSceneViewport: direction-key pulse plus MouseWheelAxis delta.
+wheel = G.send_pie_mouse_wheel(1.0)
+
+# Readiness and ownership diagnostics.
+state = G.get_pie_mouse_input_state()
+print(state.ready, state.diagnostic_code, list(state.tracked_pressed_buttons))
+
+# Idempotent explicit cleanup.
+G.release_all_pie_mouse_buttons()
+```
+
+Supported buttons are `LEFT`, `RIGHT`, and `MIDDLE`. A button release is sent
+only when UnrealBridge owns the corresponding press. If `PlayerInput` already
+reports the button down before a bridge press, the request is rejected with
+`physical_button_already_pressed`; this avoids releasing a user's pre-existing
+physical hold later.
+
+`click_pie_mouse_button` does not send down and up in the same frame. Its
+release is scheduled for `GFrameCounter + 2`, which gives Enhanced Input at
+least one full processing opportunity to observe the pressed state before the
+release edge. `PrePIEEnded` and module shutdown release every still-owned
+button directly through `PlayerController` / `PlayerInput`, even if the
+viewport input gate closed during teardown.
+
+### CLI
+
+Common flags such as `--project=Key` and `--json` precede the command:
+
+```bash
+bridge.py --project=Key pie-mouse state
+bridge.py --project=Key pie-mouse move 24 -8
+bridge.py --project=Key pie-mouse button left press
+bridge.py --project=Key pie-mouse button left release
+bridge.py --project=Key pie-mouse button right click
+bridge.py --project=Key pie-mouse wheel 1
+bridge.py --project=Key pie-mouse release-all
+```
+
+Mutation commands print a stable JSON payload containing `success`, `handled`,
+`operation`, `diagnostic_code`, `message`, `pressed_buttons`, and
+`dispatch_frame`. A rejected mutation also makes the CLI exit non-zero. The
+`state` command is an inspection command and exits successfully while reporting
+route readiness and any failure diagnostic.
+
+### Diagnostics
+
+| Code | Meaning |
+|------|---------|
+| `no_pie` / `pie_not_ready` | No PIE world, or BeginPlay has not completed |
+| `no_game_instance` / `no_local_player` / `no_player_controller` | The first-local-player chain is incomplete |
+| `no_game_viewport` / `no_viewport` / `no_player_input` | The gameplay input route is incomplete |
+| `no_input_device` / `input_device_not_owned` | No valid device mapping for the first local player |
+| `viewport_input_ignored` | `UGameViewportClient::IgnoreInput()` is active |
+| `player_controller_input_disabled` / `pawn_input_disabled` | A gameplay input stack gate is disabled |
+| `physical_button_already_pressed` | The key was already down outside bridge ownership |
+| `button_already_pressed` / `button_not_owned` | Invalid bridge ownership transition |
+| `owner_target_lost` | PIE target vanished; bridge tracking was cleared, but a release could not be delivered |
+| `ok_release_bypassed_input_gate` | Cleanup succeeded directly through PlayerInput while a normal input gate was closed |
+
+For gameplay mouse automation, do not substitute `press_key`, OS mouse APIs,
+UMG delegate broadcasts, or Slate pointer events. Those paths do not exercise
+the same physical-key Enhanced Input chain.
+
+---
+
 ## Slate-level key injection (UI / menu control)
 
 When a UI popup / full-screen menu is active, UE typically removes all

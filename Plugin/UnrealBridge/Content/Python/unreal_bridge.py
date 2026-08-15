@@ -16,7 +16,7 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-08-15T13:52:23+00:00'
+_GENERATED_AT = '2026-08-15T15:08:56+00:00'
 _UE_VERSION = '5.7.4-0+UE5'
 
 class Anim:
@@ -2910,6 +2910,11 @@ class Gameplay:
         return unreal.UnrealBridgeGameplayLibrary.clear_sticky_input(input_action_path)
 
     @staticmethod
+    def click_pie_mouse_button(*, button):
+        """X.click_pie_mouse_button(button) -> BridgePIEMouseInputResult"""
+        return unreal.UnrealBridgeGameplayLibrary.click_pie_mouse_button(button)
+
+    @staticmethod
     def create_input_action(*, package_path, value_type, description="", save=True):
         """X.create_input_action(package_path, value_type, description="", save=True) -> str"""
         return unreal.UnrealBridgeGameplayLibrary.create_input_action(package_path, value_type, description, save)
@@ -3175,6 +3180,11 @@ class Gameplay:
         return unreal.UnrealBridgeGameplayLibrary.get_pie_frame_number()
 
     @staticmethod
+    def get_pie_mouse_input_state():
+        """X.get_pie_mouse_input_state() -> BridgePIEMouseInputState"""
+        return unreal.UnrealBridgeGameplayLibrary.get_pie_mouse_input_state()
+
+    @staticmethod
     def get_pie_num_ai_controllers():
         """X.get_pie_num_ai_controllers() -> int32"""
         return unreal.UnrealBridgeGameplayLibrary.get_pie_num_ai_controllers()
@@ -3325,6 +3335,11 @@ class Gameplay:
         return unreal.UnrealBridgeGameplayLibrary.project_world_to_screen(world_location)
 
     @staticmethod
+    def release_all_pie_mouse_buttons():
+        """X.release_all_pie_mouse_buttons() -> BridgePIEMouseInputResult"""
+        return unreal.UnrealBridgeGameplayLibrary.release_all_pie_mouse_buttons()
+
+    @staticmethod
     def remove_ia_mapping_from_imc(*, mapping_context_path, input_action_path, key_name):
         """X.remove_ia_mapping_from_imc(mapping_context_path, input_action_path, key_name) -> bool"""
         return unreal.UnrealBridgeGameplayLibrary.remove_ia_mapping_from_imc(mapping_context_path, input_action_path, key_name)
@@ -3368,6 +3383,21 @@ class Gameplay:
     def respawn_player_pawn():
         """X.respawn_player_pawn() -> bool"""
         return unreal.UnrealBridgeGameplayLibrary.respawn_player_pawn()
+
+    @staticmethod
+    def send_pie_mouse_button(*, button, pressed):
+        """X.send_pie_mouse_button(button, pressed) -> BridgePIEMouseInputResult"""
+        return unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_button(button, pressed)
+
+    @staticmethod
+    def send_pie_mouse_move(*, delta_x, delta_y):
+        """X.send_pie_mouse_move(delta_x, delta_y) -> BridgePIEMouseInputResult"""
+        return unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_move(delta_x, delta_y)
+
+    @staticmethod
+    def send_pie_mouse_wheel(*, wheel_delta):
+        """X.send_pie_mouse_wheel(wheel_delta) -> BridgePIEMouseInputResult"""
+        return unreal.UnrealBridgeGameplayLibrary.send_pie_mouse_wheel(wheel_delta)
 
     @staticmethod
     def set_actor_time_dilation(*, actor_name, scale):

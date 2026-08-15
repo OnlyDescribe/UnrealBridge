@@ -17,6 +17,11 @@
       "WHILE_PIE",
       "WHILE_SUBJECT_ALIVE"
     ],
+    "BridgePIEMouseButton": [
+      "LEFT",
+      "MIDDLE",
+      "RIGHT"
+    ],
     "BridgeTrigger": [
       "ACTOR_LIFECYCLE",
       "ANIM_NOTIFY",
@@ -31,7 +36,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-08-15T13:52:23+00:00",
+  "generated_at": "2026-08-15T15:08:56+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -11466,6 +11471,18 @@
           ],
           "returns": "bool"
         },
+        "click_pie_mouse_button": {
+          "doc": "X.click_pie_mouse_button(button) -> BridgePIEMouseInputResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "button",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePIEMouseInputResult"
+        },
         "create_input_action": {
           "doc": "X.create_input_action(package_path, value_type, description=\"\", save=True) -> str",
           "params": [
@@ -12141,6 +12158,11 @@
           "params": [],
           "returns": "int64"
         },
+        "get_pie_mouse_input_state": {
+          "doc": "X.get_pie_mouse_input_state() -> BridgePIEMouseInputState",
+          "params": [],
+          "returns": "BridgePIEMouseInputState"
+        },
         "get_pie_num_ai_controllers": {
           "doc": "X.get_pie_num_ai_controllers() -> int32",
           "params": [],
@@ -12531,6 +12553,11 @@
           ],
           "returns": "Vector2D or None"
         },
+        "release_all_pie_mouse_buttons": {
+          "doc": "X.release_all_pie_mouse_buttons() -> BridgePIEMouseInputResult",
+          "params": [],
+          "returns": "BridgePIEMouseInputResult"
+        },
         "remove_ia_mapping_from_imc": {
           "doc": "X.remove_ia_mapping_from_imc(mapping_context_path, input_action_path, key_name) -> bool",
           "params": [
@@ -12727,6 +12754,54 @@
           "doc": "X.respawn_player_pawn() -> bool",
           "params": [],
           "returns": "bool"
+        },
+        "send_pie_mouse_button": {
+          "doc": "X.send_pie_mouse_button(button, pressed) -> BridgePIEMouseInputResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "button",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "pressed",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePIEMouseInputResult"
+        },
+        "send_pie_mouse_move": {
+          "doc": "X.send_pie_mouse_move(delta_x, delta_y) -> BridgePIEMouseInputResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "delta_x",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "delta_y",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePIEMouseInputResult"
+        },
+        "send_pie_mouse_wheel": {
+          "doc": "X.send_pie_mouse_wheel(wheel_delta) -> BridgePIEMouseInputResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "wheel_delta",
+              "type": ""
+            }
+          ],
+          "returns": "BridgePIEMouseInputResult"
         },
         "set_actor_time_dilation": {
           "doc": "X.set_actor_time_dilation(actor_name, scale) -> bool",
@@ -30976,6 +31051,30 @@
       "elapsed_ms",
       "note",
       "success"
+    ],
+    "BridgePIEMouseInputResult": [
+      "diagnostic_code",
+      "dispatch_frame",
+      "handled",
+      "message",
+      "operation",
+      "pressed_buttons",
+      "success"
+    ],
+    "BridgePIEMouseInputState": [
+      "diagnostic_code",
+      "has_player_input",
+      "input_device_id",
+      "message",
+      "pawn_input_enabled",
+      "pending_click_release_buttons",
+      "pie_active",
+      "player_controller_input_enabled",
+      "player_controller_name",
+      "player_input_pressed_buttons",
+      "ready",
+      "tracked_pressed_buttons",
+      "viewport_input_ignored"
     ],
     "BridgePSDAddResult": [
       "error",
