@@ -513,6 +513,77 @@ namespace BridgeUMGImpl
 		int32 ChildCount = 0;
 	};
 
+	bool GetPropertyObjectForValidation(
+		const TSharedPtr<FJsonObject>& Operation,
+		const TCHAR* Field,
+		TSharedPtr<FJsonObject>& OutProperties,
+		FString& OutError)
+	{
+		OutProperties.Reset();
+		if (!Operation->HasField(Field))
+		{
+			return true;
+		}
+
+		const TSharedPtr<FJsonValue>* Value = Operation->Values.Find(Field);
+		if (!Value || !Value->IsValid() || (*Value)->Type != EJson::Object)
+		{
+			OutError = FString::Printf(TEXT("'%s' must be a JSON object."), Field);
+			return false;
+		}
+
+		OutProperties = (*Value)->AsObject();
+		if (!OutProperties.IsValid())
+		{
+			OutError = FString::Printf(TEXT("'%s' must be a JSON object."), Field);
+			return false;
+		}
+		return true;
+	}
+
+	bool ValidateOptionalProperties(
+		UClass* ObjectClass,
+		const TSharedPtr<FJsonObject>& Operation,
+		const TCHAR* Field,
+		FString& OutError)
+	{
+		TSharedPtr<FJsonObject> Properties;
+		return GetPropertyObjectForValidation(Operation, Field, Properties, OutError)
+			&& ValidatePropertyNames(ObjectClass, Properties, OutError);
+	}
+
+	bool ValidateOptionalSlotProperties(
+		const FSimWidget* ParentNode,
+		const TSharedPtr<FJsonObject>& Operation,
+		FString& OutError)
+	{
+		TSharedPtr<FJsonObject> Properties;
+		if (!GetPropertyObjectForValidation(Operation, TEXT("slot_properties"), Properties, OutError))
+		{
+			return false;
+		}
+		if (!Properties.IsValid())
+		{
+			return true;
+		}
+		if (!ParentNode || !ParentNode->Class)
+		{
+			OutError = TEXT("'slot_properties' requires a parented widget.");
+			return false;
+		}
+
+		const UPanelWidget* PanelCDO = Cast<UPanelWidget>(ParentNode->Class->GetDefaultObject());
+		UClass* SlotClass = PanelCDO ? PanelCDO->GetSlotClass() : nullptr;
+		if (!SlotClass)
+		{
+			OutError = FString::Printf(
+				TEXT("Could not resolve the slot class for parent type '%s'."),
+				*ParentNode->Class->GetName());
+			return false;
+		}
+		return ValidatePropertyNames(SlotClass, Properties, OutError);
+	}
+
 	bool WouldCreateCycle(
 		const TMap<FString, FSimWidget>& Sim, const FString& Name, const FString& NewParent)
 	{
@@ -544,6 +615,9 @@ namespace BridgeUMGImpl
 			if (UPanelWidget* Panel = Cast<UPanelWidget>(Widget)) Node.ChildCount = Panel->GetChildrenCount();
 			Sim.Add(Widget->GetName(), MoveTemp(Node));
 		});
+		FString SimulatedRootName = WBP->WidgetTree->RootWidget
+			? WBP->WidgetTree->RootWidget->GetName()
+			: FString();
 
 		for (int32 OperationIndex = 0; OperationIndex < Operations.Num(); ++OperationIndex)
 		{
@@ -555,7 +629,7 @@ namespace BridgeUMGImpl
 			}
 			FString Kind;
 			FString Name;
-			if (!Operation->TryGetStringField(TEXT("op"), Kind))
+			if (!Operation->TryGetStringField(TEXT("op"), Kind) || Kind.IsEmpty())
 			{
 				OutError = FString::Printf(TEXT("Operation %d requires non-empty 'op'."), OperationIndex);
 				return false;
@@ -579,6 +653,13 @@ namespace BridgeUMGImpl
 					OutError = FString::Printf(TEXT("Widget '%s' already exists."), *Name);
 					return false;
 				}
+				FText NameReason;
+				if (!FName::IsValidXName(FName(*Name), INVALID_OBJECTNAME_CHARACTERS, &NameReason))
+				{
+					OutError = FString::Printf(
+						TEXT("Create widget name '%s' is invalid: %s"), *Name, *NameReason.ToString());
+					return false;
+				}
 				FString ClassToken;
 				if (!Operation->TryGetStringField(TEXT("class"), ClassToken))
 				{
@@ -586,24 +667,52 @@ namespace BridgeUMGImpl
 					return false;
 				}
 				UClass* WidgetClass = ResolveClass(ClassToken, UWidget::StaticClass());
-				if (!WidgetClass)
+				if (!WidgetClass || WidgetClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated))
 				{
-					OutError = FString::Printf(TEXT("Could not resolve widget class '%s'."), *ClassToken);
+					OutError = FString::Printf(
+						TEXT("Could not resolve concrete widget class '%s'."), *ClassToken);
+					return false;
+				}
+				if (Operation->HasField(TEXT("is_variable"))
+					&& !Operation->HasTypedField<EJson::Boolean>(TEXT("is_variable")))
+				{
+					OutError = FString::Printf(TEXT("Create '%s' requires boolean 'is_variable'."), *Name);
+					return false;
+				}
+				if (Operation->HasField(TEXT("index"))
+					&& !Operation->HasTypedField<EJson::Number>(TEXT("index")))
+				{
+					OutError = FString::Printf(TEXT("Create '%s' requires numeric 'index'."), *Name);
 					return false;
 				}
 				FString Parent;
+				if (Operation->HasField(TEXT("parent"))
+					&& !Operation->HasTypedField<EJson::String>(TEXT("parent")))
+				{
+					OutError = FString::Printf(TEXT("Create '%s' requires string 'parent'."), *Name);
+					return false;
+				}
 				Operation->TryGetStringField(TEXT("parent"), Parent);
+				FSimWidget* ParentNode = nullptr;
 				if (Parent.IsEmpty())
 				{
-					if (WBP->WidgetTree->RootWidget)
+					if (Operation->HasField(TEXT("index")))
 					{
-						OutError = TEXT("A root widget already exists; create requires a parent.");
+						OutError = FString::Printf(
+							TEXT("Create '%s' cannot specify 'index' without a parent."), *Name);
+						return false;
+					}
+					if (!SimulatedRootName.IsEmpty())
+					{
+						OutError = FString::Printf(
+							TEXT("Root widget '%s' already exists; create '%s' requires a parent."),
+							*SimulatedRootName, *Name);
 						return false;
 					}
 				}
 				else
 				{
-					FSimWidget* ParentNode = Sim.Find(Parent);
+					ParentNode = Sim.Find(Parent);
 					if (!ParentNode || !ParentNode->bExists || !ParentNode->Class->IsChildOf(UPanelWidget::StaticClass()))
 					{
 						OutError = FString::Printf(TEXT("Parent '%s' is missing or is not a panel."), *Parent);
@@ -615,10 +724,21 @@ namespace BridgeUMGImpl
 						OutError = FString::Printf(TEXT("Parent '%s' cannot accept another child."), *Parent);
 						return false;
 					}
+				}
+				if (!ValidateOptionalProperties(
+					WidgetClass, Operation, TEXT("properties"), OutError)
+					|| !ValidateOptionalSlotProperties(ParentNode, Operation, OutError))
+				{
+					return false;
+				}
+				if (ParentNode)
+				{
 					++ParentNode->ChildCount;
 				}
-				if (!ValidatePropertyNames(WidgetClass, GetOptionalObject(Operation, TEXT("properties")), OutError))
-					return false;
+				else
+				{
+					SimulatedRootName = Name;
+				}
 				FSimWidget NewNode;
 				NewNode.Class = WidgetClass;
 				NewNode.Parent = Parent;
@@ -635,15 +755,31 @@ namespace BridgeUMGImpl
 
 				if (Kind == TEXT("set"))
 				{
-					if (!ValidatePropertyNames(Node->Class, GetOptionalObject(Operation, TEXT("properties")), OutError))
+					const FSimWidget* ParentNode = Node->Parent.IsEmpty() ? nullptr : Sim.Find(Node->Parent);
+					if (!ValidateOptionalProperties(
+						Node->Class, Operation, TEXT("properties"), OutError)
+						|| !ValidateOptionalSlotProperties(ParentNode, Operation, OutError))
+					{
 						return false;
+					}
 				}
 				else if (Kind == TEXT("move"))
 				{
+					if (Node->Parent.IsEmpty())
+					{
+						OutError = FString::Printf(TEXT("Move '%s' cannot move the root widget."), *Name);
+						return false;
+					}
 					FString Parent;
 					if (!Operation->TryGetStringField(TEXT("parent"), Parent) || Parent.IsEmpty())
 					{
 						OutError = FString::Printf(TEXT("Move '%s' requires 'parent'."), *Name);
+						return false;
+					}
+					if (Operation->HasField(TEXT("index"))
+						&& !Operation->HasTypedField<EJson::Number>(TEXT("index")))
+					{
+						OutError = FString::Printf(TEXT("Move '%s' requires numeric 'index'."), *Name);
 						return false;
 					}
 					FSimWidget* ParentNode = Sim.Find(Parent);
@@ -651,6 +787,10 @@ namespace BridgeUMGImpl
 						|| WouldCreateCycle(Sim, Name, Parent))
 					{
 						OutError = FString::Printf(TEXT("Move '%s' has an invalid or cyclic parent '%s'."), *Name, *Parent);
+						return false;
+					}
+					if (!ValidateOptionalSlotProperties(ParentNode, Operation, OutError))
+					{
 						return false;
 					}
 					if (Node->Parent != Parent)
@@ -1399,17 +1539,6 @@ bool UUnrealBridgeUMGLibrary::SetWidgetIsVariable(
 	Widget->bIsVariable = bIsVariable;
 	FinishTemplateWrite(WBP, true);
 	return true;
-}
-
-bool UUnrealBridgeUMGLibrary::AddWidgetBlueprintToPIEViewport(
-	const FString& WidgetBlueprintPath, int32 ZOrder)
-{
-	return !SpawnWidgetInstance(WidgetBlueprintPath, ZOrder).IsEmpty();
-}
-
-int32 UUnrealBridgeUMGLibrary::RemovePIEPreviewWidgets()
-{
-	return RemoveAllWidgetInstances();
 }
 
 FBridgeWidgetRenderResult UUnrealBridgeUMGLibrary::RenderWidgetBlueprintToPNG(

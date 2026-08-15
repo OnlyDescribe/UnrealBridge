@@ -442,20 +442,31 @@ def _cli() -> int:
         print(f"  {stats['classes']} classes, {stats['methods']} methods, "
               f"{stats['skipped']} skipped (Python keyword in param name)")
 
-        # UE auto-loads Python from the target project's Plugins/UnrealBridge/
-        # Content/Python/, not the source repo. Mirror the wrapper there so a
-        # plain `import unreal_bridge` inside UE just works after regen.
+        # UE auto-loads Python from the installed plugin's Content/Python.
+        # A source checkout can be installed directly at Plugins/UnrealBridge,
+        # or vendored with the .uplugin under Plugin/UnrealBridge (as in Key).
+        # Resolve the actual descriptor location so regeneration does not
+        # create a second, inactive Content/Python tree beside a nested plugin.
         proj_uproject = (last_json.get("project_path") or "").strip()
         if proj_uproject:
-            mirror = os.path.join(
-                os.path.dirname(proj_uproject), "Plugins", "UnrealBridge",
-                "Content", "Python", "unreal_bridge.py",
+            project_plugin = os.path.join(
+                os.path.dirname(proj_uproject), "Plugins", "UnrealBridge"
             )
+            nested_plugin = os.path.join(project_plugin, "Plugin", "UnrealBridge")
+            plugin_root = (
+                nested_plugin
+                if os.path.isfile(os.path.join(nested_plugin, "UnrealBridge.uplugin"))
+                else project_plugin
+            )
+            mirror = os.path.join(plugin_root, "Content", "Python", "unreal_bridge.py")
             try:
-                os.makedirs(os.path.dirname(mirror), exist_ok=True)
-                with open(mirror, "w", encoding="utf-8") as f:
-                    f.write(wrapper_src)
-                print(f"Mirrored to {mirror}")
+                if os.path.normcase(os.path.abspath(mirror)) == os.path.normcase(os.path.abspath(wrapper_out)):
+                    print(f"Live plugin wrapper already written at {mirror}")
+                else:
+                    os.makedirs(os.path.dirname(mirror), exist_ok=True)
+                    with open(mirror, "w", encoding="utf-8") as f:
+                        f.write(wrapper_src)
+                    print(f"Mirrored to {mirror}")
             except OSError as e:
                 print(f"WARN: could not mirror wrapper to project ({e})", file=sys.stderr)
         else:

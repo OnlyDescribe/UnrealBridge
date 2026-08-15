@@ -820,15 +820,17 @@ def cmd_preflight(args):
         except OSError as e:
             print(f"ERROR: cannot read {args.file}: {e}", file=sys.stderr)
             return 2
-    errs = _preflight_or_skip(code)
+    errs, warns = _preflight_or_skip(code)
+    for warning in warns:
+        print(warning, file=sys.stderr)
     if not errs:
         if args.json:
-            print(json.dumps({"ok": True, "errors": []}))
+            print(json.dumps({"ok": True, "errors": [], "warnings": warns}, ensure_ascii=False))
         else:
             print("preflight: clean")
         return 0
     if args.json:
-        print(json.dumps({"ok": False, "errors": errs}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "errors": errs, "warnings": warns}, ensure_ascii=False))
     else:
         for e in errs:
             print(e, file=sys.stderr)

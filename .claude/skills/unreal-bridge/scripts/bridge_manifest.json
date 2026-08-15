@@ -31,7 +31,7 @@
       "TIMER"
     ]
   },
-  "generated_at": "2026-08-06T15:18:20+00:00",
+  "generated_at": "2026-08-15T13:52:23+00:00",
   "libraries": {
     "UnrealBridgeAnimLibrary": {
       "functions": {
@@ -8813,24 +8813,6 @@
             }
           ],
           "returns": "BridgeChannelCaptureResult"
-        },
-        "capture_game_viewport_with_ui": {
-          "doc": "X.capture_game_viewport_with_ui(out_file_path, include_base64) -> BridgeScreenshotResult",
-          "params": [
-            {
-              "default": null,
-              "has_default": false,
-              "name": "out_file_path",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "include_base64",
-              "type": ""
-            }
-          ],
-          "returns": "BridgeScreenshotResult"
         },
         "capture_viewport_channel": {
           "doc": "X.capture_viewport_channel(channel, out_file_path, width, height, max_depth_clamp, include_base64) -> BridgeChannelCaptureResult",
@@ -28041,95 +28023,6 @@
     },
     "UnrealBridgeUMGLibrary": {
       "functions": {
-        "add_widget_blueprint_to_pie_viewport": {
-          "doc": "X.add_widget_blueprint_to_pie_viewport(widget_blueprint_path, z_order) -> bool",
-          "params": [
-            {
-              "default": null,
-              "has_default": false,
-              "name": "widget_blueprint_path",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "z_order",
-              "type": ""
-            }
-          ],
-          "returns": "bool"
-        },
-        "apply_widget_tree_batch": {
-          "doc": "X.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> BridgeWidgetBatchResult",
-          "params": [
-            {
-              "default": null,
-              "has_default": false,
-              "name": "widget_blueprint_path",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "patch_json",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "compile_after",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "save_after",
-              "type": ""
-            }
-          ],
-          "returns": "BridgeWidgetBatchResult"
-        },
-        "remove_pie_preview_widgets": {
-          "doc": "X.remove_pie_preview_widgets() -> int32",
-          "params": [],
-          "returns": "int32"
-        },
-        "render_widget_blueprint_to_png": {
-          "doc": "X.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> BridgeWidgetRenderResult",
-          "params": [
-            {
-              "default": null,
-              "has_default": false,
-              "name": "widget_blueprint_path",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "logical_width",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "logical_height",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "scale",
-              "type": ""
-            },
-            {
-              "default": null,
-              "has_default": false,
-              "name": "output_file",
-              "type": ""
-            }
-          ],
-          "returns": "BridgeWidgetRenderResult"
-        },
         "add_mvvm_binding": {
           "doc": "X.add_mvvm_binding(widget_blueprint_path, view_model_name, source_field_path, destination_widget_name, destination_field_path, mode) -> str",
           "params": [
@@ -28381,6 +28274,36 @@
             }
           ],
           "returns": "bool"
+        },
+        "apply_widget_tree_batch": {
+          "doc": "X.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> BridgeWidgetBatchResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "widget_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "patch_json",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "compile_after",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "save_after",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeWidgetBatchResult"
         },
         "click_live_button": {
           "doc": "X.click_live_button(instance_handle, widget_name) -> bool",
@@ -28884,6 +28807,42 @@
             }
           ],
           "returns": "bool"
+        },
+        "render_widget_blueprint_to_png": {
+          "doc": "X.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> BridgeWidgetRenderResult",
+          "params": [
+            {
+              "default": null,
+              "has_default": false,
+              "name": "widget_blueprint_path",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "logical_width",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "logical_height",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "scale",
+              "type": ""
+            },
+            {
+              "default": null,
+              "has_default": false,
+              "name": "output_file",
+              "type": ""
+            }
+          ],
+          "returns": "BridgeWidgetRenderResult"
         },
         "reparent_widget": {
           "doc": "X.reparent_widget(widget_blueprint_path, widget_name, new_parent_name, insert_index) -> bool",
@@ -29422,7 +29381,7 @@
       }
     }
   },
-  "project_path": "G:/UEProjects/GameplayLocomotion/GameplayLocomotion.uproject",
+  "project_path": "K:/Project/Key/Key.uproject",
   "structs": {
     "BridgeAbilityCooldownInfo": [
       "ability_class_name",
@@ -32164,13 +32123,6 @@
       "rolled_back",
       "success"
     ],
-    "BridgeWidgetRenderResult": [
-      "error",
-      "height",
-      "output_file",
-      "success",
-      "width"
-    ],
     "BridgeWidgetBindingInfo": [
       "function_name",
       "kind",
@@ -32217,6 +32169,13 @@
       "name",
       "type",
       "value"
+    ],
+    "BridgeWidgetRenderResult": [
+      "error",
+      "height",
+      "output_file",
+      "success",
+      "width"
     ],
     "BridgeWidgetTransformKey": [
       "angle",

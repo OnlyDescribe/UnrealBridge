@@ -16,8 +16,8 @@ structural rather than mnemonic.
 
 import unreal
 
-_GENERATED_AT = '2026-08-06T15:18:20+00:00'
-_UE_VERSION = '5.7.1-48512491+++UE5+Release-5.7'
+_GENERATED_AT = '2026-08-15T13:52:23+00:00'
+_UE_VERSION = '5.7.4-0+UE5'
 
 class Anim:
     """Wraps unreal.UnrealBridgeAnimLibrary (kwargs-only)."""
@@ -1860,11 +1860,6 @@ class Editor:
     def capture_channel_from_pose(*, channel, location, rotation, fov, width, height, max_depth_clamp, out_file_path, include_base64):
         """X.capture_channel_from_pose(channel, location, rotation, fov, width, height, max_depth_clamp, out_file_path, include_base64) -> BridgeChannelCaptureResult"""
         return unreal.UnrealBridgeEditorLibrary.capture_channel_from_pose(channel, location, rotation, fov, width, height, max_depth_clamp, out_file_path, include_base64)
-
-    @staticmethod
-    def capture_game_viewport_with_ui(*, out_file_path, include_base64):
-        """X.capture_game_viewport_with_ui(out_file_path, include_base64) -> BridgeScreenshotResult"""
-        return unreal.UnrealBridgeEditorLibrary.capture_game_viewport_with_ui(out_file_path, include_base64)
 
     @staticmethod
     def capture_viewport_channel(*, channel, out_file_path, width, height, max_depth_clamp, include_base64):
@@ -6813,26 +6808,6 @@ class UMG:
     """Wraps unreal.UnrealBridgeUMGLibrary (kwargs-only)."""
 
     @staticmethod
-    def add_widget_blueprint_to_pie_viewport(*, widget_blueprint_path, z_order):
-        """X.add_widget_blueprint_to_pie_viewport(widget_blueprint_path, z_order) -> bool"""
-        return unreal.UnrealBridgeUMGLibrary.add_widget_blueprint_to_pie_viewport(widget_blueprint_path, z_order)
-
-    @staticmethod
-    def apply_widget_tree_batch(*, widget_blueprint_path, patch_json, compile_after, save_after):
-        """X.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> BridgeWidgetBatchResult"""
-        return unreal.UnrealBridgeUMGLibrary.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after)
-
-    @staticmethod
-    def remove_pie_preview_widgets():
-        """X.remove_pie_preview_widgets() -> int32"""
-        return unreal.UnrealBridgeUMGLibrary.remove_pie_preview_widgets()
-
-    @staticmethod
-    def render_widget_blueprint_to_png(*, widget_blueprint_path, logical_width, logical_height, scale, output_file):
-        """X.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> BridgeWidgetRenderResult"""
-        return unreal.UnrealBridgeUMGLibrary.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file)
-
-    @staticmethod
     def add_mvvm_binding(*, widget_blueprint_path, view_model_name, source_field_path, destination_widget_name, destination_field_path, mode):
         """X.add_mvvm_binding(widget_blueprint_path, view_model_name, source_field_path, destination_widget_name, destination_field_path, mode) -> str"""
         return unreal.UnrealBridgeUMGLibrary.add_mvvm_binding(widget_blueprint_path, view_model_name, source_field_path, destination_widget_name, destination_field_path, mode)
@@ -6861,6 +6836,11 @@ class UMG:
     def add_widget_animation_transform_keys(*, widget_blueprint_path, animation_name, widget_name, keys, interpolation):
         """X.add_widget_animation_transform_keys(widget_blueprint_path, animation_name, widget_name, keys, interpolation) -> bool"""
         return unreal.UnrealBridgeUMGLibrary.add_widget_animation_transform_keys(widget_blueprint_path, animation_name, widget_name, keys, interpolation)
+
+    @staticmethod
+    def apply_widget_tree_batch(*, widget_blueprint_path, patch_json, compile_after, save_after):
+        """X.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> BridgeWidgetBatchResult"""
+        return unreal.UnrealBridgeUMGLibrary.apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after)
 
     @staticmethod
     def click_live_button(*, instance_handle, widget_name):
@@ -6996,6 +6976,11 @@ class UMG:
     def rename_widget(*, widget_blueprint_path, widget_name, new_name):
         """X.rename_widget(widget_blueprint_path, widget_name, new_name) -> bool"""
         return unreal.UnrealBridgeUMGLibrary.rename_widget(widget_blueprint_path, widget_name, new_name)
+
+    @staticmethod
+    def render_widget_blueprint_to_png(*, widget_blueprint_path, logical_width, logical_height, scale, output_file):
+        """X.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> BridgeWidgetRenderResult"""
+        return unreal.UnrealBridgeUMGLibrary.render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file)
 
     @staticmethod
     def reparent_widget(*, widget_blueprint_path, widget_name, new_parent_name, insert_index):

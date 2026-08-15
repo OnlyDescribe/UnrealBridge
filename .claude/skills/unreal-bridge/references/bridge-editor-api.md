@@ -939,9 +939,7 @@ therefore the current docked viewport size and may be too small for UI evidence.
 Starts in-process PIE in a dedicated Slate window at the requested pixel size.
 The function uses a transient copy of `ULevelEditorPlaySettings`, so it does not
 change the user's persistent Editor Preferences. Use this before
-`capture_active_viewport_as_displayed` for repeatable UI validation. The legacy
-`capture_game_viewport_with_ui` name is retained as a PIE-only compatibility
-alias and delegates to that official implementation.
+`capture_active_viewport_as_displayed` for repeatable UI validation.
 
 ```python
 unreal.UnrealBridgeEditorLibrary.start_pie_in_new_window(1280, 720)
@@ -1271,7 +1269,7 @@ JSON shape:
           ] } ] } ] }
 ```
 
-**What's covered.** Every BlueprintCallable UFUNCTION whose owning class lives in the `/Script/UnrealBridge` package — i.e. all `UUnrealBridge*Library` classes. Current count: 1384 reflected UFUNCTIONs across 26 libraries (the Python-callable manifest currently exposes 1382 methods).
+**What's covered.** Every BlueprintCallable UFUNCTION whose owning class lives in the `/Script/UnrealBridge` package — i.e. all `UUnrealBridge*Library` classes. Current count: 1392 reflected UFUNCTIONs across 26 libraries (the Python-callable manifest currently exposes 1390 methods).
 
 **What's not covered (yet).**
 - USTRUCT field layouts (return / param types include the struct name, but not its UPROPERTY list).

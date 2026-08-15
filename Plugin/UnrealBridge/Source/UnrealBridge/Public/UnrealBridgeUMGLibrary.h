@@ -304,18 +304,6 @@ public:
 	static bool SetWidgetIsVariable(
 		const FString& WidgetBlueprintPath, const FString& WidgetName, bool bIsVariable);
 
-	/**
-	 * Compatibility alias backed by the official SpawnWidgetInstance runtime
-	 * registry. Prefer SpawnWidgetInstance when the instance handle is needed.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
-	static bool AddWidgetBlueprintToPIEViewport(
-		const FString& WidgetBlueprintPath, int32 ZOrder);
-
-	/** Compatibility alias backed by the official RemoveAllWidgetInstances. */
-	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
-	static int32 RemovePIEPreviewWidgets();
-
 	/** Render a compiled Widget Blueprint through Slate into a transparent PNG. */
 	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|UMG")
 	static FBridgeWidgetRenderResult RenderWidgetBlueprintToPNG(

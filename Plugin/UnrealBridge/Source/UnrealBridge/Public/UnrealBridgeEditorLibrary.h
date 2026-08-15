@@ -548,14 +548,6 @@ public:
 	static FBridgeScreenshotResult CaptureActiveViewportAsDisplayed(const FString& OutFilePath, bool bIncludeBase64);
 
 	/**
-	 * Compatibility alias for CaptureActiveViewportAsDisplayed that requires
-	 * PIE and therefore preserves the original UI-validation contract.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "UnrealBridge|Editor")
-	static FBridgeScreenshotResult CaptureGameViewportWithUI(
-		const FString& OutFilePath, bool bIncludeBase64);
-
-	/**
 	 * Render a single GBuffer channel of the active viewport via a
 	 * transient ASceneCapture2D at the same pose + FOV. Agents use this
 	 * to go from "can see the viewport" to "can measure it" — e.g.

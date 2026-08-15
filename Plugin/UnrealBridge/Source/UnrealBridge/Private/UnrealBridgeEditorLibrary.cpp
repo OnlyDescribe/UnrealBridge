@@ -1365,19 +1365,6 @@ FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureActiveViewportAsDispl
 		bIncludeBase64);
 }
 
-FBridgeScreenshotResult UUnrealBridgeEditorLibrary::CaptureGameViewportWithUI(
-	const FString& OutFilePath, bool bIncludeBase64)
-{
-	if (!GEditor || !GEditor->PlayWorld)
-	{
-		FBridgeScreenshotResult Result;
-		Result.Source = TEXT("PIESlate");
-		Result.Error = TEXT("PIE is not running or the game viewport is unavailable.");
-		return Result;
-	}
-	return CaptureActiveViewportAsDisplayed(OutFilePath, bIncludeBase64);
-}
-
 // ─── GBuffer channel capture ───────────────────────────────
 
 namespace BridgeEditorImpl

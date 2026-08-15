@@ -655,11 +655,6 @@ Remove one viewport instance and invalidate the handle.
 Remove every live instance spawned through this library. Call it in a cleanup
 path even if individual removals already succeeded. Then stop PIE.
 
-The legacy Key adapters `add_widget_blueprint_to_pie_viewport` and
-`remove_pie_preview_widgets` now delegate to the official
-`spawn_widget_instance` / `remove_all_widget_instances` implementation.
-Prefer the official handle-based API for new automation.
-
 ## Offscreen Widget Render
 
 ### render_widget_blueprint_to_png(widget_blueprint_path, logical_width, logical_height, scale, output_file) -> FBridgeWidgetRenderResult
@@ -702,7 +697,7 @@ print(result.success, result.output_file, result.width, result.height, result.er
 
 ### apply_widget_tree_batch(widget_blueprint_path, patch_json, compile_after, save_after) -> FBridgeWidgetBatchResult
 
-Preflight and apply a WidgetTree patch as one editor transaction. Supported operations are `create`, `set`, `move`, `reorder`, and `delete`. The preflight rejects duplicate names, missing/non-panel parents, single-child-panel overflow, cycles, invalid classes/properties, root deletion, and delete operations without `confirm_delete: true` before changing the asset.
+Preflight and apply a WidgetTree patch as one editor transaction. Supported operations are `create`, `set`, `move`, `reorder`, and `delete`. The preflight rejects duplicate names, multiple roots, root moves/deletion, missing or non-panel parents, single-child-panel overflow, cycles, invalid widget/slot properties, malformed property objects and typed options, and delete operations without `confirm_delete: true` before changing the asset.
 
 Moves preserve compatible slot properties and allow explicit slot overrides. A failure encountered during application invokes editor undo for the transaction.
 
